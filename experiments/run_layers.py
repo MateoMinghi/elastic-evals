@@ -211,6 +211,9 @@ def logreg_with_oof(xs, dev_idx, dev_y):
     return proba, classes
 
 
+SKIP_ZEROSHOT = "--no-zeroshot" in sys.argv
+
+
 def nli_zeroshot(texts, hypotheses, multi_label=False):
     import hashlib
     key = hashlib.sha256(json.dumps([texts, hypotheses, multi_label]).encode()).hexdigest()[:16]
@@ -243,6 +246,8 @@ def local_synthetic(items, out):
         pos = classes.index(1)
         for it, pr in zip(items, proba):
             out.add(it, q, "e5_logreg", float(pr[pos]), per_item)
+    if SKIP_ZEROSHOT:
+        return
     hyp = {"user_frustrated": "The user is frustrated or annoyed."}
     texts = [syn_view(it, "user_frustrated") for it in items]
     res, per_item = nli_zeroshot(texts, [hyp["user_frustrated"]], multi_label=True)
@@ -267,6 +272,8 @@ def local_choice(items, out, task, labels, hypothesis):
                 out.add(it, task, "e5_logreg_goldpool", dict(zip(classes, map(float, pr))), per_item)
         np.save(DATA / "preds" / f"{task}-{lang}-e5.npy", xs)
         json.dump([it["id"] for it in sub], (DATA / "preds" / f"{task}-{lang}-e5.ids.json").open("w"))
+    if SKIP_ZEROSHOT:
+        return
     test = [it for it in items if it["split"] == "test"]  # zero-shot needs no dev split; it is slow on CPU
     res, per_item = nli_zeroshot([it["text"] for it in test], [hypothesis.format(v.lower()) for v in labels.values()])
     rev = {hypothesis.format(v.lower()): k for k, v in labels.items()}
@@ -340,4 +347,5 @@ async def main(which):
 
 
 if __name__ == "__main__":
-    asyncio.run(main(sys.argv[1:] or ["synthetic", "massive", "sentiment", "injection"]))
+    args = [a for a in sys.argv[1:] if not a.startswith("--no-")]
+    asyncio.run(main(args or ["synthetic", "massive", "sentiment", "injection"]))

@@ -112,11 +112,13 @@ def scores(ids, dec, gold, question, multi):
     y = [gold[(i, question)] for i in ids]
     fallback = "__invalid__" if multi else 0
     p = [dec[i] if dec[i] is not None else fallback for i in ids]
-    avg = "macro" if multi else "binary"
+    # macro-F1 over the gold label set only: invalid answers count as errors, not as an extra class
+    f1 = (f1_score(y, p, average="macro", labels=sorted(set(y)), zero_division=0) if multi
+          else f1_score(y, p, average="binary", zero_division=0))
     return {
         "n": len(ids),
         "acc": accuracy_score(y, p),
-        "f1": f1_score(y, p, average=avg, zero_division=0),
+        "f1": f1,
         "kappa": cohen_kappa_score(y, p),
     }
 
