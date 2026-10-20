@@ -27,7 +27,7 @@ The inspiration is the "Observability, traces and evals" section of the PayMe ag
 |---|---|---|
 | Borrow Langfuse concepts | **Yes** | Its v4 model (one wide, append-only document per span, with trace attributes copied onto it) is exactly the shape OpenSearch handles well. Its evaluator, rule and job model is mature and worth copying. Core is MIT. |
 | OpenSearch as the event store | **Yes, for the right reasons** | Wins on: full-text search over conversations, k-NN (similar failures, dataset mining), open security (document-level security, audit), and running on infrastructure banks already have. Loses to ClickHouse on aggregation speed and disk footprint: ClickHouse's own study found Elasticsearch ~5× larger on disk; there is no public OpenSearch-vs-ClickHouse benchmark. So "it handles massive data" is a design goal we must engineer for (§6), not a free property. |
-| Jev and other classifiers as evaluators | **Yes, our strongest differentiator** | At very high volume only classifiers are cheap enough to score 100% of turns. Langfuse already supports Jev ("decision model" evaluators, Sept 2026). No open-source tool offers the full cascade: thresholds calibrated against human labels, escalation by confidence, and drift monitoring of the evaluators themselves. |
+| Classifiers as evaluators (self-hosted small models first, Jev optional) | **Yes, our strongest differentiator** | At very high volume only cheap evaluators can score 100% of turns. Most of them need no generative model at all: lexical rules, behavioural signals, and small encoder classifiers trained on our own labels (§7.5). Langfuse already supports Jev ("decision model" evaluators, Sept 2026), so we keep Jev as an optional plugin. No open-source tool offers the full cascade: thresholds calibrated against human labels, escalation by confidence, distilling expensive judges into cheap classifiers, and drift monitoring of the evaluators themselves. |
 | Sentry integration | **Yes, kept narrow** | Sentry and OTel share the same W3C trace ID, so linking works without extra plumbing. Sentry should own *errors and alerts*; we own *traces, content and scores*. Do not mirror full traces or every score into Sentry (§9). |
 
 **Honest positioning vs Langfuse.** Langfuse (acquired by ClickHouse in Jan 2026, MIT core) already ships much of the eval feature list, including Jev. We are not building "Langfuse but different". Our reasons to exist are:
@@ -54,8 +54,8 @@ The inspiration is the "Observability, traces and evals" section of the PayMe ag
 - Prompt management or a playground. Integrate with existing tools instead.
 - Our own dashboards for operational metrics. Use OpenSearch Dashboards.
 - A drop-in replacement for the Langfuse API.
-- Hosting evaluator models. We call them over HTTP; serving them is the deployer's job.
-- Elasticsearch support from day one. We keep a storage interface so it can be added later (§13).
+- Serving large evaluator models. LLM judges and hosted classifiers are called over HTTP. We do ship CPU inference for the small encoder evaluators in §7.5.
+- Elasticsearch support. **OpenSearch is the chosen store** (decided 2026-10-20). We keep a storage interface for internal cleanliness, not to promise a second backend.
 
 ## 4. Architecture
 
@@ -159,11 +159,14 @@ class Evaluator(Protocol):
 
 `EvalTarget` gives the evaluator the span or trace tree, the mapped variables, and the dataset's expected output when there is one.
 
-Built-in adapters:
-- **Jev**, through its question types (yes/no maps to `p_true`, choice maps to a categorical score with its distribution, score maps to ordered levels).
-- **Generic HTTP classifiers** returning probabilities: HHEM, Prompt Guard, mDeBERTa zero-shot NLI, ShieldGemma.
-- **LLM judges**, forced to call a tool that returns a label and an explanation.
+Built-in adapters, cheapest first:
 - **Code checks** for schema, tool-call validation, regex and Presidio checks, and comparing amounts and recipients against the real records.
+- **Lexical rules:** phrase and pattern rules run through text analyzers (Spanish stemming, accent folding, slang synonyms), compiled from a rules file (§7.5).
+- **Behavioural signals** computed from the trace itself: retries, tool loops, user rephrasing, abandonment, escalation (§7.5).
+- **Embedding kNN and trained heads:** a small multilingual encoder plus nearest labelled examples, or a small classifier trained on our own labels (§7.5). Runs on CPU in the eval workers.
+- **Generic HTTP classifiers** returning probabilities: HHEM, Prompt Guard, mDeBERTa zero-shot NLI, ShieldGemma.
+- **Jev (optional)**, through its question types (yes/no maps to `p_true`, choice maps to a categorical score with its distribution, score maps to ordered levels).
+- **LLM judges**, forced to call a tool that returns a label and an explanation.
 
 ### 7.2 Score shape
 
@@ -191,8 +194,8 @@ The rule: **store the raw output and the probabilities, never only the decision 
 
 | Tier | Runs on | Purpose |
 |---|---|---|
-| 0: deterministic | 100% | Schema and tool-call validity, PII leaks, claimed success with no operation record behind it, critical fields checked against records. **Critical metrics live here, never in a classifier.** |
-| 1: classifiers | 100% (or a high fraction) | Routing correctness, frustration, injection, groundedness, safety, topic. Thresholds set per evaluator and per slice for a target precision. |
+| 0: deterministic | 100% | Schema and tool-call validity, PII leaks, claimed success with no operation record behind it, critical fields checked against records, lexical rules, behavioural signals. **Critical metrics live here, never in a classifier.** |
+| 1: small classifiers | 100% (or a high fraction) | Self-hosted encoders first (embedding kNN, distilled heads, open guard models); Jev where the tenant allows hosted calls. Routing correctness, frustration, injection, groundedness, safety, topic. Thresholds set per evaluator and per slice for a target precision. |
 | 2: LLM judge | Uncertain band of tier 1, plus a random audit slice | A judge from a *different model family* than the agent and than any runtime classifier making the same decision (no correlated judging). Has a cost cap per rule. |
 | 3: human | Stratified sample, plus every tier-1/tier-2 disagreement | Annotation queues fill automatically from score conditions. Human labels are the ground truth for calibration. |
 
@@ -213,7 +216,43 @@ When a trace completes:
 
 Sessions work the same way, keyed on `gen_ai.conversation.id`, with a longer cooldown.
 
-### 7.5 Calibration loop
+### 7.5 Evaluating without generative models
+
+Most production evals can run without Jev or an LLM. These four techniques are cheap, can be self-hosted (no data leaves the bank), and are deterministic or close to it. They make up the default tier 0 and tier 1.
+
+1. **Lexical rules.**
+   - Text is normalized with the same analyzers OpenSearch uses: Spanish stemming, accent and case folding, synonym lists for slang.
+   - Rules are matched against that normalized text: phrases, patterns, proximity ("sin" within 2 tokens of "penalidad").
+   - Typical uses: the required disclosure was said, a forbidden promise was made, a success claim ("ya quedó reservado") appears with no operation record behind it, a refusal or apology occurred, the reply is in the wrong language.
+   - The rules are versioned like any other evaluator. They run in the eval workers. OpenSearch's percolator can run the same rules over stored data to re-score history after a rule changes.
+   - Limit: lexical rules miss paraphrases and get negation and sarcasm wrong. They are best for precise "did X appear" questions, not judgments of quality.
+2. **Behavioural signals from the trace.** These are often better quality signals than any judge, and they cost nothing:
+   - tool errors, retries and loops (same tool and arguments N times), steps over budget;
+   - the user rephrasing the same request (high embedding similarity between consecutive user turns);
+   - corrections ("no, I said…"), abandonment mid-flow, hand-off to a human, conversation length against the norm for that flow.
+3. **Reference metrics for offline experiments.** Exact match, token F1, chrF, edit distance, JSON-schema validity and tool-call F1 against a dataset's expected output. No reference exists in production, so these are offline only.
+4. **Small encoder classifiers (our own "Jev").**
+   - A multilingual sentence encoder (e.g. multilingual-e5-small or a MiniLM paraphrase model, ~100M parameters, a few ms per turn on CPU with ONNX Runtime) embeds each turn. The same vectors feed the `embeddings-*` index, so we compute them once.
+   - **kNN voting:** label a turn by its nearest labelled examples. You can start with a few dozen examples per class.
+   - **Trained heads:** logistic regression or a SetFit fine-tune per eval question, which outputs probabilities.
+
+**The distillation loop.** This is how we replace expensive evaluators over time:
+1. Humans (tier 3) and the LLM judge (tier 2) label a sample.
+2. Those labels train a small head for that question.
+3. The head is shadowed against the judge on the human-labelled set.
+4. When the two agree enough (§7.6), the head takes over 100% scoring.
+5. The judge drops back to auditing the uncertain band and a random slice.
+
+As a result, LLM cost scales with *uncertainty*, not with traffic.
+
+**Where generative models are still needed:**
+- **Cold start**, before any labels exist.
+- **Open-ended quality questions** ("was this answer helpful and correct?", "did the agent follow a sensible plan?"), where small models are weak.
+- **Auditing the cheap evaluators.**
+
+So the realistic target is not "no LLMs". It is "LLMs on a small, shrinking fraction of traffic".
+
+### 7.6 Calibration loop
 
 For each evaluator version and slice (tenant, language, flow), compute against human labels:
 - Cohen's kappa (weighted for ordinal scores),
@@ -227,7 +266,7 @@ A new evaluator version is shadowed against the old one on the human-labelled se
 
 To get valid confidence intervals from mixed human and automatic labels, use prediction-powered inference (stratified PPI, Fisch et al. 2024).
 
-### 7.6 Offline experiments and CI
+### 7.7 Offline experiments and CI
 
 - **Datasets** have items with versions. Items can be created from traces in bulk, or via a k-NN search for "similar failures".
 - **Runner:** the `ee run` CLI and a pytest plugin run the agent over a dataset. Spans are tagged `ee.experiment.*` and the same evaluators run on them.
@@ -309,6 +348,7 @@ Operational dashboards (latency, cost, error rate) are saved objects in OpenSear
 | Ingest workers | Python first; Go if profiling demands it | One language to start |
 | Collector | Upstream `otelcol-contrib` with config we ship | `loadbalancing`, `tail_sampling`, `redaction`, `transform` processors |
 | Queue | Kafka (Redpanda for small installs) | Replay, multiple consumers, backpressure |
+| Small evaluators | sentence-transformers / SetFit for training, ONNX Runtime on CPU for inference | Self-hosted, cheap, no data leaves the deployment |
 | Event store | OpenSearch 3.x | §2 |
 | Config store | Postgres | Transactions, foreign keys, small data |
 | UI | React + TypeScript | — |
@@ -319,7 +359,8 @@ Operational dashboards (latency, cost, error rate) are saved objects in OpenSear
 | Risk or question | Mitigation or decision needed |
 |---|---|
 | OpenSearch analytics and storage cost at billions of spans | Keep payloads out of the hot index, write `traces-*` rollups, use star-tree on a metrics index for fixed dashboards, and retain content based on eval results. **Load-test early** (2–3× target peak). Keep a ClickHouse adapter as a possible analytics sink later. |
-| **OpenSearch vs Elasticsearch?** (the repo is named *elastic*-evals) | Recommend OpenSearch first (Apache-2.0, open security plugin), behind a storage interface. Elasticsearch has ES\|QL `LOOKUP JOIN` and logsdb, but synthetic source is Enterprise-only and the licensing is AGPL/SSPL/ELv2. **Decide now.** |
+| ~~OpenSearch vs Elasticsearch?~~ | **Decided: OpenSearch** (Apache-2.0, security plugin included at no cost). The repo name stays. |
+| Small classifiers too weak for some questions | Every evaluator has a calibration report. Questions whose small classifier never agrees closely enough with human labels stay with the LLM judge, on a sample. |
 | GenAI semantic conventions still changing | Pin the version and normalize at ingest. |
 | Jev quality in Spanish | An independent audit found 3–6 points lower accuracy in Spanish. Validate on our own Spanish data before relying on it. Jev is hosted only; check each tenant's data policy. |
 | Evaluator model licenses | Patronus Lynx is non-commercial, and Llama and Gemma have custom licenses. The default set should favour Apache and MIT models (Qwen3Guard, HHEM-2.1-Open, Granite Guardian, Flow Judge, mDeBERTa XNLI, Presidio). |
@@ -341,11 +382,12 @@ Operational dashboards (latency, cost, error rate) are saved objects in OpenSear
    - **Load test at this point** and revisit the OpenSearch decision with real numbers.
 3. **Phase 2: evaluation engine.**
    - Evaluator SDK, the rule engine (filters, sampling, cascades) and eval workers.
-   - Adapters for Jev, HTTP classifiers and LLM judges.
+   - Lexical rules, behavioural signals and embedding-kNN evaluators first. Then adapters for HTTP classifiers, Jev and LLM judges.
    - `scores-*`, the score explorer and deterministic score IDs.
 4. **Phase 3: offline and humans.**
    - Datasets, the experiment runner (CLI and pytest) and CI gates.
    - Annotation queues and the calibration report.
+   - The distillation loop: train small heads from labels, shadow them against the judge, promote them.
 5. **Phase 4: Sentry bridge.**
    - Propagation guide, the `before_send` helper, the webhook bridge, External Issue links and eval-failure alerts.
 6. **Phase 5: scale and governance.**
