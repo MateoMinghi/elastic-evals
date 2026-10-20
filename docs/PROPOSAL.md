@@ -1,5 +1,7 @@
 # elastic-evals: proposal
 
+> Superseded by [`DESIGN.md`](DESIGN.md) (v1.0, 2026-10-20). Kept as the pre-experiment proposal.
+
 Status: draft for discussion · 2026-10-20
 
 ## 1. What we are building

@@ -7,7 +7,7 @@ Open-source observability and evaluation for production AI agents. The plan:
 
 **Status:** design and working prototype.
 
-- **Design:** [docs/PROPOSAL.md](docs/PROPOSAL.md). Background research: [docs/research/](docs/research/).
+- **Design:** [docs/DESIGN.md](docs/DESIGN.md) (v1.0). Background research: [docs/research/](docs/research/). The earlier [proposal](docs/PROPOSAL.md) is kept for history.
 - **Evidence:** [experiments/results/ENGINE_SUMMARY.md](experiments/results/ENGINE_SUMMARY.md) for the engine, [experiments/results/RESULTS.md](experiments/results/RESULTS.md) for the single layers.
 - **Prototype:** the `elastic_evals` package, an evaluation engine with no storage or UI yet.
 
