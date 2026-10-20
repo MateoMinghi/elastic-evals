@@ -238,7 +238,7 @@ def local_choice(items, out, task, labels, hypothesis):
                 out.add(it, task, "e5_logreg_goldpool", dict(zip(classes, map(float, pr))), per_item)
         np.save(DATA / "preds" / f"{task}-{lang}-e5.npy", xs)
         json.dump([it["id"] for it in sub], (DATA / "preds" / f"{task}-{lang}-e5.ids.json").open("w"))
-    test = [it for it in items if it["split"] != "pool"]
+    test = [it for it in items if it["split"] == "test"]  # zero-shot needs no dev split; it is slow on CPU
     res, per_item = nli_zeroshot([it["text"] for it in test], [hypothesis.format(v.lower()) for v in labels.values()])
     rev = {hypothesis.format(v.lower()): k for k, v in labels.items()}
     for it, r in zip(test, res):
@@ -278,7 +278,7 @@ async def skip(*_args, **_kwargs):
 
 async def main(which):
     load_env()
-    client = OpenRouter(concurrency=4)
+    client = OpenRouter(concurrency=6)
     judges = list(LLMS)
     if "--local-only" in which:  # rules + CPU models only; no paid calls
         global hosted_synthetic, hosted_choice, hosted_injection
