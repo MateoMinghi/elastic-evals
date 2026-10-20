@@ -13,7 +13,7 @@ questions:
     critical: true
   disclosure_missing:
     ask: Does the assistant make clear, at some point, that it is an AI / automated assistant and not a human?
-    view: first_assistant:2
+    view: assistant
     rule: disclosure_missing
     invert: true
   fee_mismatch:

@@ -1,0 +1,637 @@
+[
+ {
+  "run": "hosted",
+  "test": "A-test",
+  "drift": {
+   "disclosure_missing": {
+    "n": 17,
+    "agreement": 1.0
+   },
+   "tool_loop": {
+    "n": 17,
+    "agreement": 0.9411764705882353
+   },
+   "user_frustrated": {
+    "n": 17,
+    "agreement": 0.8235294117647058
+   },
+   "fee_mismatch": {
+    "n": 17,
+    "agreement": 1.0
+   },
+   "false_confirmation": {
+    "n": 17,
+    "agreement": 0.9411764705882353
+   }
+  },
+  "engine": {
+   "acc": {
+    "false_confirmation": 0.9915611814345991,
+    "disclosure_missing": 1.0,
+    "fee_mismatch": 1.0,
+    "user_frustrated": 0.9156118143459916,
+    "tool_loop": 1.0
+   },
+   "mean_acc": 0.9814345991561183,
+   "usd_per_1M_conv": 212.34982278481013,
+   "ms_per_conv": 3418.984126561131,
+   "llm_share": 1.0,
+   "hosted_share": 1.0
+  },
+  "baselines": {
+   "rules": {
+    "acc": {
+     "false_confirmation": 0.7721518987341772,
+     "disclosure_missing": 1.0,
+     "fee_mismatch": 0.8396624472573839,
+     "user_frustrated": 0.6286919831223629,
+     "tool_loop": 1.0
+    },
+    "mean_acc": 0.8481012658227849,
+    "usd_per_1M_conv": 0.0,
+    "ms_per_conv": 2.465625434585955,
+    "llm_share": 0.0,
+    "hosted_share": 0.0
+   },
+   "e5": {
+    "acc": {
+     "false_confirmation": 0.8016877637130801,
+     "disclosure_missing": 0.9957805907172996,
+     "fee_mismatch": 0.510548523206751,
+     "user_frustrated": 0.9409282700421941,
+     "tool_loop": 0.8565400843881856
+    },
+    "mean_acc": 0.821097046413502,
+    "usd_per_1M_conv": 0.0,
+    "ms_per_conv": 318.52356194092806,
+    "llm_share": 0.0,
+    "hosted_share": 0.0
+   },
+   "jev": {
+    "acc": {
+     "false_confirmation": 0.8734177215189873,
+     "disclosure_missing": 1.0,
+     "fee_mismatch": 1.0,
+     "user_frustrated": 0.9113924050632911,
+     "tool_loop": 1.0
+    },
+    "mean_acc": 0.9569620253164558,
+    "usd_per_1M_conv": 37.57972151898735,
+    "ms_per_conv": 190.1855929915793,
+    "llm_share": 0.0,
+    "hosted_share": 1.0
+   },
+   "llm_ds": {
+    "acc": {
+     "false_confirmation": 0.9873417721518988,
+     "disclosure_missing": 1.0,
+     "fee_mismatch": 0.9915611814345991,
+     "user_frustrated": 0.8734177215189873,
+     "tool_loop": 0.9873417721518988
+    },
+    "mean_acc": 0.9679324894514767,
+    "usd_per_1M_conv": 74.71675105485232,
+    "ms_per_conv": 1200.042199202538,
+    "llm_share": 1.0,
+    "hosted_share": 1.0
+   },
+   "llm_luna": {
+    "acc": {
+     "false_confirmation": 0.9957805907172996,
+     "disclosure_missing": 1.0,
+     "fee_mismatch": 1.0,
+     "user_frustrated": 0.9071729957805907,
+     "tool_loop": 0.8734177215189873
+    },
+    "mean_acc": 0.9552742616033756,
+    "usd_per_1M_conv": 83.16371308016876,
+    "ms_per_conv": 2418.5084795948887,
+    "llm_share": 1.0,
+    "hosted_share": 1.0
+   },
+   "llm_haiku": {
+    "acc": {
+     "false_confirmation": 0.9915611814345991,
+     "disclosure_missing": 0.9957805907172996,
+     "fee_mismatch": 1.0,
+     "user_frustrated": 0.8776371308016878,
+     "tool_loop": 0.9493670886075949
+    },
+    "mean_acc": 0.9628691983122362,
+    "usd_per_1M_conv": 124.48565400843884,
+    "ms_per_conv": 888.281666658243,
+    "llm_share": 1.0,
+    "hosted_share": 1.0
+   }
+  },
+  "routes": {
+   "false_confirmation": [
+    "llm_haiku"
+   ],
+   "disclosure_missing": [
+    "rules"
+   ],
+   "fee_mismatch": [
+    "llm_luna"
+   ],
+   "user_frustrated": [
+    "e5",
+    "jev"
+   ],
+   "tool_loop": [
+    "rules"
+   ]
+  }
+ },
+ {
+  "run": "hosted",
+  "test": "B (unseen generator)",
+  "drift": {
+   "disclosure_missing": {
+    "n": 27,
+    "agreement": 0.8148148148148148
+   },
+   "tool_loop": {
+    "n": 27,
+    "agreement": 1.0
+   },
+   "user_frustrated": {
+    "n": 27,
+    "agreement": 0.8148148148148148
+   },
+   "fee_mismatch": {
+    "n": 27,
+    "agreement": 1.0
+   },
+   "false_confirmation": {
+    "n": 27,
+    "agreement": 0.9629629629629629
+   }
+  },
+  "engine": {
+   "acc": {
+    "false_confirmation": 0.9733333333333334,
+    "disclosure_missing": 0.8033333333333333,
+    "fee_mismatch": 0.9933333333333333,
+    "user_frustrated": 0.8166666666666667,
+    "tool_loop": 1.0
+   },
+   "mean_acc": 0.9173333333333333,
+   "usd_per_1M_conv": 204.54703333333333,
+   "ms_per_conv": 2936.5250509366438,
+   "llm_share": 1.0,
+   "hosted_share": 1.0
+  },
+  "baselines": {
+   "rules": {
+    "acc": {
+     "false_confirmation": 0.81,
+     "disclosure_missing": 0.8033333333333333,
+     "fee_mismatch": 0.85,
+     "user_frustrated": 0.5766666666666667,
+     "tool_loop": 1.0
+    },
+    "mean_acc": 0.808,
+    "usd_per_1M_conv": 0.0,
+    "ms_per_conv": 2.099802616676243,
+    "llm_share": 0.0,
+    "hosted_share": 0.0
+   },
+   "e5": {
+    "acc": {
+     "false_confirmation": 0.83,
+     "disclosure_missing": 0.6666666666666666,
+     "fee_mismatch": 0.5366666666666666,
+     "user_frustrated": 0.7666666666666667,
+     "tool_loop": 0.9333333333333333
+    },
+    "mean_acc": 0.7466666666666667,
+    "usd_per_1M_conv": 0.0,
+    "ms_per_conv": 136.41797563666537,
+    "llm_share": 0.0,
+    "hosted_share": 0.0
+   },
+   "jev": {
+    "acc": {
+     "false_confirmation": 0.8633333333333333,
+     "disclosure_missing": 1.0,
+     "fee_mismatch": 0.9466666666666667,
+     "user_frustrated": 0.8566666666666667,
+     "tool_loop": 1.0
+    },
+    "mean_acc": 0.9333333333333333,
+    "usd_per_1M_conv": 34.43146,
+    "ms_per_conv": 175.08377447335383,
+    "llm_share": 0.0,
+    "hosted_share": 1.0
+   },
+   "llm_ds": {
+    "acc": {
+     "false_confirmation": 0.9866666666666667,
+     "disclosure_missing": 0.9966666666666667,
+     "fee_mismatch": 0.99,
+     "user_frustrated": 0.8066666666666666,
+     "tool_loop": 0.9833333333333333
+    },
+    "mean_acc": 0.9526666666666668,
+    "usd_per_1M_conv": 112.48098266666666,
+    "ms_per_conv": 1171.9722422933287,
+    "llm_share": 1.0,
+    "hosted_share": 1.0
+   },
+   "llm_luna": {
+    "acc": {
+     "false_confirmation": 0.97,
+     "disclosure_missing": 0.9966666666666667,
+     "fee_mismatch": 0.9933333333333333,
+     "user_frustrated": 0.86,
+     "tool_loop": 0.92
+    },
+    "mean_acc": 0.9480000000000001,
+    "usd_per_1M_conv": 76.83966666666667,
+    "ms_per_conv": 1898.172598460005,
+    "llm_share": 1.0,
+    "hosted_share": 1.0
+   },
+   "llm_haiku": {
+    "acc": {
+     "false_confirmation": 0.9733333333333334,
+     "disclosure_missing": 0.9966666666666667,
+     "fee_mismatch": 0.9833333333333333,
+     "user_frustrated": 0.83,
+     "tool_loop": 0.9233333333333333
+    },
+    "mean_acc": 0.9413333333333334,
+    "usd_per_1M_conv": 115.70866666666667,
+    "ms_per_conv": 948.334650183336,
+    "llm_share": 1.0,
+    "hosted_share": 1.0
+   }
+  },
+  "routes": {
+   "false_confirmation": [
+    "llm_haiku"
+   ],
+   "disclosure_missing": [
+    "rules"
+   ],
+   "fee_mismatch": [
+    "llm_luna"
+   ],
+   "user_frustrated": [
+    "e5",
+    "jev"
+   ],
+   "tool_loop": [
+    "rules"
+   ]
+  }
+ },
+ {
+  "run": "hosted + 100 B labels",
+  "test": "B-rest",
+  "drift": {
+   "disclosure_missing": {
+    "n": 17,
+    "agreement": 1.0
+   },
+   "tool_loop": {
+    "n": 17,
+    "agreement": 1.0
+   },
+   "false_confirmation": {
+    "n": 17,
+    "agreement": 1.0
+   },
+   "fee_mismatch": {
+    "n": 17,
+    "agreement": 1.0
+   },
+   "user_frustrated": {
+    "n": 17,
+    "agreement": 0.8823529411764706
+   }
+  },
+  "engine": {
+   "acc": {
+    "false_confirmation": 0.99,
+    "disclosure_missing": 1.0,
+    "fee_mismatch": 0.99,
+    "user_frustrated": 0.875,
+    "tool_loop": 1.0
+   },
+   "mean_acc": 0.9710000000000001,
+   "usd_per_1M_conv": 215.848659,
+   "ms_per_conv": 3078.5525410350006,
+   "llm_share": 1.0,
+   "hosted_share": 1.0
+  },
+  "baselines": {
+   "rules": {
+    "acc": {
+     "false_confirmation": 0.82,
+     "disclosure_missing": 0.795,
+     "fee_mismatch": 0.85,
+     "user_frustrated": 0.575,
+     "tool_loop": 1.0
+    },
+    "mean_acc": 0.808,
+    "usd_per_1M_conv": 0.0,
+    "ms_per_conv": 2.305201034992024,
+    "llm_share": 0.0,
+    "hosted_share": 0.0
+   },
+   "e5": {
+    "acc": {
+     "false_confirmation": 0.87,
+     "disclosure_missing": 0.77,
+     "fee_mismatch": 0.59,
+     "user_frustrated": 0.77,
+     "tool_loop": 0.915
+    },
+    "mean_acc": 0.783,
+    "usd_per_1M_conv": 0.0,
+    "ms_per_conv": 156.49334588500096,
+    "llm_share": 0.0,
+    "hosted_share": 0.0
+   },
+   "jev": {
+    "acc": {
+     "false_confirmation": 0.87,
+     "disclosure_missing": 1.0,
+     "fee_mismatch": 0.94,
+     "user_frustrated": 0.89,
+     "tool_loop": 1.0
+    },
+    "mean_acc": 0.9400000000000001,
+    "usd_per_1M_conv": 34.49754,
+    "ms_per_conv": 149.2731279400141,
+    "llm_share": 0.0,
+    "hosted_share": 1.0
+   },
+   "llm_ds": {
+    "acc": {
+     "false_confirmation": 0.99,
+     "disclosure_missing": 0.995,
+     "fee_mismatch": 0.985,
+     "user_frustrated": 0.84,
+     "tool_loop": 0.99
+    },
+    "mean_acc": 0.96,
+    "usd_per_1M_conv": 116.478629,
+    "ms_per_conv": 1187.6095600549843,
+    "llm_share": 1.0,
+    "hosted_share": 1.0
+   },
+   "llm_luna": {
+    "acc": {
+     "false_confirmation": 0.975,
+     "disclosure_missing": 1.0,
+     "fee_mismatch": 0.99,
+     "user_frustrated": 0.875,
+     "tool_loop": 0.91
+    },
+    "mean_acc": 0.95,
+    "usd_per_1M_conv": 76.996,
+    "ms_per_conv": 1768.2267511800183,
+    "llm_share": 1.0,
+    "hosted_share": 1.0
+   },
+   "llm_haiku": {
+    "acc": {
+     "false_confirmation": 0.975,
+     "disclosure_missing": 0.995,
+     "fee_mismatch": 0.985,
+     "user_frustrated": 0.855,
+     "tool_loop": 0.91
+    },
+    "mean_acc": 0.944,
+    "usd_per_1M_conv": 115.736,
+    "ms_per_conv": 949.1773071199896,
+    "llm_share": 1.0,
+    "hosted_share": 1.0
+   }
+  },
+  "routes": {
+   "false_confirmation": [
+    "llm_ds"
+   ],
+   "disclosure_missing": [
+    "rules",
+    "jev"
+   ],
+   "fee_mismatch": [
+    "llm_luna"
+   ],
+   "user_frustrated": [
+    "e5",
+    "llm_luna"
+   ],
+   "tool_loop": [
+    "rules"
+   ]
+  }
+ },
+ {
+  "run": "local-only",
+  "test": "A-test",
+  "drift": {},
+  "engine": {
+   "acc": {
+    "false_confirmation": 0.9367088607594937,
+    "disclosure_missing": 1.0,
+    "fee_mismatch": 0.8396624472573839,
+    "user_frustrated": 0.9409282700421941,
+    "tool_loop": 1.0
+   },
+   "mean_acc": 0.9434599156118144,
+   "usd_per_1M_conv": 0.0,
+   "ms_per_conv": 46.107006552772255,
+   "llm_share": 0.0,
+   "hosted_share": 0.0
+  },
+  "baselines": {
+   "rules": {
+    "acc": {
+     "false_confirmation": 0.7721518987341772,
+     "disclosure_missing": 1.0,
+     "fee_mismatch": 0.8396624472573839,
+     "user_frustrated": 0.6286919831223629,
+     "tool_loop": 1.0
+    },
+    "mean_acc": 0.8481012658227849,
+    "usd_per_1M_conv": 0.0,
+    "ms_per_conv": 1.89341790292211,
+    "llm_share": 0.0,
+    "hosted_share": 0.0
+   },
+   "e5": {
+    "acc": {
+     "false_confirmation": 0.8016877637130801,
+     "disclosure_missing": 0.9957805907172996,
+     "fee_mismatch": 0.510548523206751,
+     "user_frustrated": 0.9409282700421941,
+     "tool_loop": 0.8565400843881856
+    },
+    "mean_acc": 0.821097046413502,
+    "usd_per_1M_conv": 0.0,
+    "ms_per_conv": 411.61882937130906,
+    "llm_share": 0.0,
+    "hosted_share": 0.0
+   }
+  },
+  "routes": {
+   "false_confirmation": [
+    "rules",
+    "e5"
+   ],
+   "disclosure_missing": [
+    "rules"
+   ],
+   "fee_mismatch": [
+    "rules"
+   ],
+   "user_frustrated": [
+    "e5"
+   ],
+   "tool_loop": [
+    "rules"
+   ]
+  }
+ },
+ {
+  "run": "local-only",
+  "test": "B (unseen generator)",
+  "drift": {},
+  "engine": {
+   "acc": {
+    "false_confirmation": 0.87,
+    "disclosure_missing": 0.8033333333333333,
+    "fee_mismatch": 0.85,
+    "user_frustrated": 0.7666666666666667,
+    "tool_loop": 1.0
+   },
+   "mean_acc": 0.858,
+   "usd_per_1M_conv": 0.0,
+   "ms_per_conv": 121.17298509000345,
+   "llm_share": 0.0,
+   "hosted_share": 0.0
+  },
+  "baselines": {
+   "rules": {
+    "acc": {
+     "false_confirmation": 0.81,
+     "disclosure_missing": 0.8033333333333333,
+     "fee_mismatch": 0.85,
+     "user_frustrated": 0.5766666666666667,
+     "tool_loop": 1.0
+    },
+    "mean_acc": 0.808,
+    "usd_per_1M_conv": 0.0,
+    "ms_per_conv": 2.2923487000207388,
+    "llm_share": 0.0,
+    "hosted_share": 0.0
+   },
+   "e5": {
+    "acc": {
+     "false_confirmation": 0.83,
+     "disclosure_missing": 0.6666666666666666,
+     "fee_mismatch": 0.5366666666666666,
+     "user_frustrated": 0.7666666666666667,
+     "tool_loop": 0.9333333333333333
+    },
+    "mean_acc": 0.7466666666666667,
+    "usd_per_1M_conv": 0.0,
+    "ms_per_conv": 134.14757474666658,
+    "llm_share": 0.0,
+    "hosted_share": 0.0
+   }
+  },
+  "routes": {
+   "false_confirmation": [
+    "rules",
+    "e5"
+   ],
+   "disclosure_missing": [
+    "rules"
+   ],
+   "fee_mismatch": [
+    "rules"
+   ],
+   "user_frustrated": [
+    "e5"
+   ],
+   "tool_loop": [
+    "rules"
+   ]
+  }
+ },
+ {
+  "run": "local-only + 100 B labels",
+  "test": "B-rest",
+  "drift": {},
+  "engine": {
+   "acc": {
+    "false_confirmation": 0.89,
+    "disclosure_missing": 0.805,
+    "fee_mismatch": 0.85,
+    "user_frustrated": 0.77,
+    "tool_loop": 1.0
+   },
+   "mean_acc": 0.8629999999999999,
+   "usd_per_1M_conv": 0.0,
+   "ms_per_conv": 288.58869033500923,
+   "llm_share": 0.0,
+   "hosted_share": 0.0
+  },
+  "baselines": {
+   "rules": {
+    "acc": {
+     "false_confirmation": 0.82,
+     "disclosure_missing": 0.795,
+     "fee_mismatch": 0.85,
+     "user_frustrated": 0.575,
+     "tool_loop": 1.0
+    },
+    "mean_acc": 0.808,
+    "usd_per_1M_conv": 0.0,
+    "ms_per_conv": 2.473777804952988,
+    "llm_share": 0.0,
+    "hosted_share": 0.0
+   },
+   "e5": {
+    "acc": {
+     "false_confirmation": 0.87,
+     "disclosure_missing": 0.77,
+     "fee_mismatch": 0.59,
+     "user_frustrated": 0.77,
+     "tool_loop": 0.915
+    },
+    "mean_acc": 0.783,
+    "usd_per_1M_conv": 0.0,
+    "ms_per_conv": 463.3406952599944,
+    "llm_share": 0.0,
+    "hosted_share": 0.0
+   }
+  },
+  "routes": {
+   "false_confirmation": [
+    "rules",
+    "e5"
+   ],
+   "disclosure_missing": [
+    "rules",
+    "e5"
+   ],
+   "fee_mismatch": [
+    "rules"
+   ],
+   "user_frustrated": [
+    "e5"
+   ],
+   "tool_loop": [
+    "rules"
+   ]
+  }
+ }
+]

@@ -29,6 +29,10 @@ if VARIANT == "b":
     GENERATOR = "google/gemini-3.1-flash-lite"
     OUT = Path(__file__).resolve().parent / "data" / "synthetic_b.jsonl"
     N, SEED, PREFIX = int(os.environ.get("SYN_N", "300")), 11, "synb"
+elif VARIANT == "c":  # final holdout: same messy brief as "b", a third model family, never used while iterating
+    GENERATOR = "qwen/qwen3.8-flash"
+    OUT = Path(__file__).resolve().parent / "data" / "synthetic_c.jsonl"
+    N, SEED, PREFIX = int(os.environ.get("SYN_N", "300")), 23, "sync"
 else:
     GENERATOR = "anthropic/claude-haiku-5.5"
     OUT = Path(__file__).resolve().parent / "data" / "synthetic.jsonl"
@@ -106,7 +110,7 @@ def make_spec(rng: random.Random, i: int) -> dict:
             "two_identical_calls": (not loop) and rng.random() < 0.3,
         },
     }
-    if VARIANT == "b":  # extra draws only for variant b, so variant a's specs stay byte-identical
+    if VARIANT in ("b", "c"):  # extra draws only for b/c, so variant a's specs stay byte-identical
         spec["styles"]["three_calls_diff_args"] = (not loop) and rng.random() < 0.25
         spec["styles"]["disclosure_position"] = rng.choice(
             ["first message", "a later message", "only when the user asks if it is a person"])
@@ -128,7 +132,7 @@ def build_prompt(spec: dict, rng: random.Random) -> str:
         tool_rule = f"The agent calls `{tool}` exactly twice with the same args (first a timeout, then the real result). Never 3 times."
     else:
         tool_rule = f"The agent calls `{tool}` exactly once. It may also call one different lookup tool once."
-    if VARIANT == "b":
+    if VARIANT in ("b", "c"):
         return build_prompt_b(spec, rng, lang, fee_truth, mood, tool, tool_rule)
     lines = [
         f"Write a realistic chat between a user and the AI assistant of a banking app (\"PayMe\"), in {lang}.",
@@ -238,7 +242,7 @@ async def main():
             try:
                 res = await client.chat(
                     GENERATOR, [{"role": "user", "content": prompt}], tag="generate",
-                    temperature=1.0, max_tokens=3500 if VARIANT == "b" else 2500, response_format={"type": "json_object"},
+                    temperature=1.0, max_tokens=3500 if VARIANT in ("b", "c") else 2500, response_format={"type": "json_object"},
                     seed=attempt,
                 )
             except CacheMiss:

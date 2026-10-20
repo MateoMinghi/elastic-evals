@@ -69,6 +69,10 @@ def evaluate(name, suite, calib_convs, tests, client, rows, md):
     (OUT / f"calibration-{name}.json").write_text(json.dumps(cal, indent=1, default=str))
     qs = [q.name for q in suite.questions]
     md.append(f"\n### {name}: calibrated on {len(calib_convs)} labelled conversations\n")
+    sc = cal["suite_choice"]
+    md.append(f"Hosted evaluators chosen for the suite: {', '.join(sc['hosted']) or 'none'} "
+              f"(dev: ${1e6 * sc['usd_per_conv']:.1f} / 1M conv, {sc['ms_per_conv']:.0f} ms / conv, "
+              f"{sc['short']} question(s) below their floor).\n")
     md.append(tabulate([[q, " → ".join(cal["routes"][q]), f"{100 * cal['report'][q]['chosen']['accuracy']:.1f}",
                          f"{100 * cal['report'][q]['best_accuracy']:.1f}",
                          "yes" if cal["report"][q]["meets_target"] else "**no**"] for q in qs],
@@ -109,17 +113,24 @@ def main():
     b = load("synthetic_b.jsonl")
     a_dev, a_test = [c for c in a if c["split"] == "dev"], [c for c in a if c["split"] == "test"]
     b_cal, b_rest = b[:100], b[100:]
+    c_path = ROOT / "data" / "synthetic_c.jsonl"
+    c_set = load("synthetic_c.jsonl") if c_path.exists() else []
+    tests = {"A-test": a_test, "B (Gemini; used while iterating)": b}
+    tests_b = {"B-rest": b_rest}
+    if c_set:
+        tests["C (Qwen; final holdout)"] = c_set
+        tests_b["C (Qwen; final holdout)"] = c_set
     client = OpenRouter(concurrency=8)
     rows, md = [], ["# Engine evaluation\n", f"Suite: `{SUITE.name}`. Targets and tolerance from the suite policy."]
 
     hosted = Suite.load(SUITE)
     hosted.policy.audit_rate = 0.10  # larger audit sample than production (2%) so drift is measurable here
-    evaluate("hosted", hosted, a_dev, {"A-test": a_test, "B (unseen generator)": b}, client, rows, md)
-    evaluate("hosted + 100 B labels", hosted, a_dev + b_cal, {"B-rest": b_rest}, client, rows, md)
+    evaluate("hosted", hosted, a_dev, tests, client, rows, md)
+    evaluate("hosted + 100 B labels", hosted, a_dev + b_cal, tests_b, client, rows, md)
     local = Suite.load(SUITE)
     local.policy.allow_hosted = False
-    evaluate("local-only", local, a_dev, {"A-test": a_test, "B (unseen generator)": b}, client, rows, md)
-    evaluate("local-only + 100 B labels", local, a_dev + b_cal, {"B-rest": b_rest}, client, rows, md)
+    evaluate("local-only", local, a_dev, tests, client, rows, md)
+    evaluate("local-only + 100 B labels", local, a_dev + b_cal, tests_b, client, rows, md)
 
     md.append(f"\n\nTotal OpenRouter spend so far: ${spent_usd():.2f}")
     (OUT / "ENGINE.md").write_text("\n".join(md) + "\n")
