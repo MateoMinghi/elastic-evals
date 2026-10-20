@@ -27,6 +27,7 @@ type osExporter struct {
 	logger *zap.Logger
 	now    func() time.Time
 	stop   chan struct{}
+	blobs  *blobStore
 }
 
 func newExporter(cfg *Config, set exporter.Settings) *osExporter {
@@ -85,6 +86,11 @@ func (e *osExporter) start(ctx context.Context, host component.Host) error {
 		return err
 	}
 	e.client = client
+	if e.cfg.Blobs.Endpoint != "" {
+		if e.blobs, err = newBlobStore(e.cfg.Blobs); err != nil {
+			return err
+		}
+	}
 	book, err := loadPrices(e.cfg.PricesFile)
 	if err != nil {
 		return err
@@ -100,6 +106,9 @@ func (e *osExporter) pushTraces(ctx context.Context, td ptrace.Traces) error {
 	items := e.buildDocs(td, e.now())
 	if len(items) == 0 {
 		return nil
+	}
+	if err := e.offload(ctx, items); err != nil {
+		return err // retried: the blob put is idempotent (same key, same bytes)
 	}
 	var body bytes.Buffer
 	enc := json.NewEncoder(&body)
@@ -176,6 +185,36 @@ func (e *osExporter) checkItems(raw []byte, n int) error {
 	}
 	if retry > 0 {
 		return fmt.Errorf("bulk: %d of %d documents throttled or failed", retry, n)
+	}
+	return nil
+}
+
+// offload moves the raw content of large staged documents to the blob store.
+func (e *osExporter) offload(ctx context.Context, items []item) error {
+	if e.blobs == nil {
+		return nil
+	}
+	limit := e.blobs.cfg.ThresholdBytes
+	for _, it := range items {
+		if it.Kind != "stage" {
+			continue
+		}
+		raw, _ := it.Doc["raw"].(map[string]any)
+		if contentSize(raw) <= limit {
+			continue
+		}
+		tenant, _ := it.Doc["tenant_id"].(string)
+		uri, err := e.blobs.put(ctx, tenant, it.Doc["trace_id"].(string), it.Doc["span_id"].(string), raw)
+		if err != nil {
+			return fmt.Errorf("blob put: %w", err)
+		}
+		it.Doc["blob_uri"] = uri
+		delete(it.Doc, "raw")
+		for _, k := range []string{"input_text", "output_text", "system_text"} {
+			if s, ok := it.Doc[k].(string); ok && len(s) > limit {
+				it.Doc[k] = truncate(s, limit)
+			}
+		}
 	}
 	return nil
 }

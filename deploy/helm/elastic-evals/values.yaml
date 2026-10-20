@@ -17,6 +17,17 @@ sentry:
   org: ""
 uiUrl: ""
 
+presidio:
+  enabled: true             # PII redaction at the gateway (DESIGN.md §9); on analyzer failure content is dropped
+  replicas: 2
+  resources: { requests: { cpu: 500m, memory: 1Gi }, limits: { memory: 2Gi } }
+blobs:
+  endpoint: ""              # S3-compatible endpoint for very large content; empty keeps it inline
+  bucket: ee-content
+  region: us-east-1
+  thresholdBytes: 262144
+  existingSecret: ""        # keys: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (empty: IAM / IRSA)
+
 image:
   repository: ghcr.io/mateominghi/elastic-evals
   tag: ""                   # defaults to the chart appVersion

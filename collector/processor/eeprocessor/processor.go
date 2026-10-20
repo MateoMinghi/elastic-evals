@@ -17,12 +17,17 @@ const (
 )
 
 type eeProcessor struct {
-	cfg    *Config
-	logger *zap.Logger
+	cfg      *Config
+	logger   *zap.Logger
+	presidio *presidio
 }
 
 func newProcessor(cfg *Config, logger *zap.Logger) *eeProcessor {
-	return &eeProcessor{cfg: cfg, logger: logger}
+	p := &eeProcessor{cfg: cfg, logger: logger}
+	if cfg.Presidio.Endpoint != "" {
+		p.presidio = newPresidio(cfg.Presidio, logger)
+	}
+	return p
 }
 
 func (p *eeProcessor) processTraces(ctx context.Context, td ptrace.Traces) (ptrace.Traces, error) {
@@ -60,6 +65,9 @@ func (p *eeProcessor) processTraces(ctx context.Context, td ptrace.Traces) (ptra
 		}
 		return false
 	})
+	if p.presidio != nil && !p.cfg.DropContent {
+		p.presidio.apply(ctx, td)
+	}
 	return td, nil
 }
 

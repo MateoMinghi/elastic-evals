@@ -36,7 +36,11 @@ def ns(ts: str) -> int:
 
 
 def _content(stage_by_span, span):
-    return (stage_by_span.get(span["span_id"]) or {}).get("raw") or {}
+    doc = stage_by_span.get(span["span_id"]) or {}
+    if not doc.get("raw") and doc.get("blob_uri"):  # very large content lives in S3 (exporter `blobs`)
+        from . import blobs
+        doc["raw"] = blobs.read(doc["blob_uri"])
+    return doc.get("raw") or {}
 
 
 def _messages(v):

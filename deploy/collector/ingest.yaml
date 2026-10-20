@@ -27,6 +27,13 @@ exporters:
     preview_chars: 200
     content: stage
     prices_file: ${env:EE_PRICES_FILE:-}
+    blobs:
+      endpoint: ${env:EE_S3_ENDPOINT:-}       # empty: large content stays inline
+      bucket: ${env:EE_S3_BUCKET:-ee-content}
+      region: ${env:EE_S3_REGION:-us-east-1}
+      access_key: ${env:AWS_ACCESS_KEY_ID:-}
+      secret_key: ${env:AWS_SECRET_ACCESS_KEY:-}
+      threshold_bytes: ${env:EE_BLOB_THRESHOLD:-262144}
     retry_on_failure:
       enabled: true
       max_elapsed_time: 0   # keep retrying: Kafka holds the data meanwhile

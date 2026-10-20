@@ -27,6 +27,11 @@ processors:
       default: ${env:EE_DEFAULT_TENANT:-}
     normalize: true
     internal_environments: [ee-internal]
+    presidio:
+      endpoint: ${env:EE_PRESIDIO_URL:-}      # empty: no Presidio (the regex redaction below still runs)
+      language_attribute: ee.lang
+      score_threshold: 0.5
+      on_error: drop_content
   redaction:
     # Beta processor; a Presidio-backed processor replaces it later (DESIGN.md §5.2).
     allow_all_keys: true

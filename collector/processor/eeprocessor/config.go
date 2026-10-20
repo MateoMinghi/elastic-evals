@@ -30,6 +30,8 @@ type Config struct {
 	InternalEnvironments []string `mapstructure:"internal_environments"`
 	// Drop gen_ai content attributes (messages, tool arguments and results) instead of forwarding them.
 	DropContent bool `mapstructure:"drop_content"`
+	// Redact content with a Presidio analyzer before it leaves the gateway.
+	Presidio PresidioConfig `mapstructure:"presidio"`
 }
 
 var _ component.Config = (*Config)(nil)
@@ -39,6 +41,9 @@ func (c *Config) Validate() error {
 	if c.Tenant.Require && c.Tenant.Default != "" {
 		return errors.New("tenant.require and tenant.default are mutually exclusive")
 	}
+	if c.Presidio.OnError != "drop_content" && c.Presidio.OnError != "keep" {
+		return errors.New(`presidio.on_error must be "drop_content" or "keep"`)
+	}
 	return nil
 }
 
@@ -47,5 +52,6 @@ func createDefaultConfig() component.Config {
 		Tenant:               TenantConfig{FromResourceAttribute: "ee.tenant_id"},
 		Normalize:            true,
 		InternalEnvironments: []string{"ee-internal"},
+		Presidio:             defaultPresidio(),
 	}
 }

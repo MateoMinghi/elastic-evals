@@ -2,8 +2,11 @@ package eeopensearchexporter
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -201,4 +204,64 @@ func TestPricesReload(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("prices were not reloaded")
+}
+
+func TestOffloadLargeContent(t *testing.T) {
+	stored := map[string][]byte{}
+	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			b, _ := io.ReadAll(r.Body)
+			stored[r.URL.Path] = b
+			w.Header().Set("ETag", `"x"`)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer s3.Close()
+	e := newTestExporter(t, "http://unused")
+	e.cfg.Blobs = BlobsConfig{Endpoint: s3.URL, Bucket: "ee-content", Prefix: "content/", AccessKey: "k", SecretKey: "s", ThresholdBytes: 100, Region: "us-east-1"}
+	var err error
+	if e.blobs, err = newBlobStore(e.cfg.Blobs); err != nil {
+		t.Fatal(err)
+	}
+	items := e.buildDocs(sampleTraces(), time.Unix(0, 0))
+	if err := e.offload(context.Background(), items); err != nil {
+		t.Fatal(err)
+	}
+	var stage map[string]any
+	for _, it := range items {
+		if it.Kind == "stage" {
+			stage = it.Doc
+		}
+	}
+	uri, _ := stage["blob_uri"].(string)
+	if !strings.HasPrefix(uri, "s3://ee-content/content/acme/") || stage["raw"] != nil {
+		t.Fatalf("stage: %v", stage)
+	}
+	if len([]rune(stage["input_text"].(string))) > 101 {
+		t.Fatal("text not truncated")
+	}
+	body := dechunk(stored["/ee-content/"+strings.TrimPrefix(uri, "s3://ee-content/")])
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil || !strings.Contains(raw["input_messages"].(string), "hola") {
+		t.Fatalf("blob: %s %v", body, err)
+	}
+}
+
+// dechunk decodes an aws-chunked (streaming SigV4) upload body.
+func dechunk(b []byte) []byte {
+	if !bytes.Contains(b, []byte(";chunk-signature=")) {
+		return b
+	}
+	var out []byte
+	for len(b) > 0 {
+		head := bytes.Index(b, []byte("\r\n"))
+		var n int
+		_, _ = fmt.Sscanf(string(b[:bytes.IndexByte(b, ';')]), "%x", &n)
+		if n == 0 {
+			break
+		}
+		out = append(out, b[head+2:head+2+n]...)
+		b = b[head+2+n+2:]
+	}
+	return out
 }

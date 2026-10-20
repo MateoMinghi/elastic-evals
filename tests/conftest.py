@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import socket
@@ -79,15 +80,15 @@ def load(name, n):
     return [json.loads(line) for line in (DATA / name).open()][:n]
 
 
-@pytest.fixture(scope="module")
-def collectors(opensearch, tmp_path_factory):
+@contextlib.contextmanager
+def run_collectors(opensearch, tmp, extra_env=None):
+    """Gateway + ingest collectors on free ports and a fresh Kafka topic."""
     if not EECOL.exists():
         pytest.skip("collector not built (cd collector && builder --config builder-config.yaml)")
     try:
         socket.create_connection(tuple(KAFKA.split(":")), timeout=2).close()
     except OSError:
         pytest.skip("Kafka not running")
-    tmp = tmp_path_factory.mktemp("collector")
     ingest = yaml.safe_load((ROOT / "deploy/collector/ingest.yaml").read_text())
     ingest["exporters"]["elasticevals_opensearch"]["pools"] = {"acme": "acme", "pipe": "pipe"}
     (tmp / "ingest.yaml").write_text(yaml.safe_dump(ingest))
@@ -95,7 +96,7 @@ def collectors(opensearch, tmp_path_factory):
     env = dict(os.environ, EE_KAFKA_TOPIC=f"ee-spans-{uuid.uuid4().hex[:8]}", EE_INGEST_GROUP=f"g-{uuid.uuid4().hex[:8]}",
                EE_INDEX_PREFIX=opensearch.prefix, EE_OTLP_HTTP=f"127.0.0.1:{otlp}", EE_OTLP_GRPC=f"127.0.0.1:{free_port()}",
                EE_GATEWAY_HEALTH=f"127.0.0.1:{gh}", EE_INGEST_HEALTH=f"127.0.0.1:{ih}",
-               EE_PRICES_FILE=str(ROOT / "deploy/collector/prices.json"))
+               EE_PRICES_FILE=str(ROOT / "deploy/collector/prices.json"), **(extra_env or {}))
     logs = [open(tmp / f"{n}.log", "w") for n in ("gateway", "ingest")]
     procs = [subprocess.Popen([str(EECOL), "--config", str(ROOT / "deploy/collector/gateway.yaml")], env=env,
                               stdout=logs[0], stderr=subprocess.STDOUT),
@@ -111,3 +112,7 @@ def collectors(opensearch, tmp_path_factory):
             p.wait(10)
 
 
+@pytest.fixture(scope="module")
+def collectors(opensearch, tmp_path_factory):
+    with run_collectors(opensearch, tmp_path_factory.mktemp("collector")) as c:
+        yield c

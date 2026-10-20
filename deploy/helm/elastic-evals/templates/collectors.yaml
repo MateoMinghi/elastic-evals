@@ -28,6 +28,23 @@ spec:
             - { name: EE_INDEX_PREFIX, value: {{ $.Values.opensearch.indexPrefix | quote }} }
             - { name: EE_PRICES_FILE, value: /etc/ee/prices.json }
             - { name: EE_DEFAULT_TENANT, value: {{ $.Values.tenancy.defaultTenant | quote }} }
+            {{- if $.Values.presidio.enabled }}
+            - { name: EE_PRESIDIO_URL, value: "http://{{ include "ee.fullname" $ }}-presidio:3000" }
+            {{- end }}
+            {{- with $.Values.blobs }}
+            {{- if .endpoint }}
+            - { name: EE_S3_ENDPOINT, value: {{ .endpoint | quote }} }
+            - { name: EE_S3_BUCKET, value: {{ .bucket | quote }} }
+            - { name: EE_S3_REGION, value: {{ .region | quote }} }
+            - { name: EE_BLOB_THRESHOLD, value: {{ .thresholdBytes | quote }} }
+            {{- if .existingSecret }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: {{ .existingSecret }}, key: AWS_ACCESS_KEY_ID } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: {{ .existingSecret }}, key: AWS_SECRET_ACCESS_KEY } }
+            {{- end }}
+            {{- end }}
+            {{- end }}
           {{- if eq $name "gateway" }}
           ports:
             - { name: otlp-grpc, containerPort: 4317 }
@@ -52,3 +69,37 @@ spec:
   ports:
     - { name: otlp-grpc, port: 4317, targetPort: 4317 }
     - { name: otlp-http, port: 4318, targetPort: 4318 }
+{{- if .Values.presidio.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ee.fullname" . }}-presidio
+  labels: {{- include "ee.labels" . | nindent 4 }}
+    app.kubernetes.io/component: presidio
+spec:
+  replicas: {{ .Values.presidio.replicas }}
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: presidio }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: presidio }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: presidio
+          image: {{ include "ee.image" . }}
+          args: ["presidio", "--port", "3000"]
+          ports: [{ name: http, containerPort: 3000 }]
+          readinessProbe: { httpGet: { path: /health, port: 3000 }, periodSeconds: 10 }
+          resources: {{- toYaml .Values.presidio.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ee.fullname" . }}-presidio
+  labels: {{- include "ee.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: presidio }
+  ports: [{ name: http, port: 3000, targetPort: 3000 }]
+{{- end }}

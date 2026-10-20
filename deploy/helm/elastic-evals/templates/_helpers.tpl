@@ -23,6 +23,18 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 - name: EE_UI_URL
   value: {{ . | quote }}
 {{- end }}
+{{- with .Values.blobs }}{{- if .endpoint }}
+- name: EE_S3_ENDPOINT
+  value: {{ .endpoint | quote }}
+- name: EE_S3_REGION
+  value: {{ .region | quote }}
+{{- if .existingSecret }}
+- name: AWS_ACCESS_KEY_ID
+  valueFrom: { secretKeyRef: { name: {{ .existingSecret }}, key: AWS_ACCESS_KEY_ID } }
+- name: AWS_SECRET_ACCESS_KEY
+  valueFrom: { secretKeyRef: { name: {{ .existingSecret }}, key: AWS_SECRET_ACCESS_KEY } }
+{{- end }}
+{{- end }}{{- end }}
 {{- if .Values.hosted.existingSecret }}
 - name: OPENROUTER_API_KEY
   valueFrom: { secretKeyRef: { name: {{ .Values.hosted.existingSecret }}, key: OPENROUTER_API_KEY } }

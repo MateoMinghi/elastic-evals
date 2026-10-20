@@ -77,12 +77,22 @@ services:
       opensearch: { condition: service_healthy }
       postgres: { condition: service_healthy }
 
+  presidio:
+    <<: *ee
+    command: ["presidio", "--port", "3000"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:3000/health')\""]
+      interval: 5s
+      retries: 60
+
   gateway:
     <<: *collector
     command: ["--config", "/etc/ee/gateway.yaml"]
-    environment: { EE_KAFKA_BROKERS: "kafka:9092" }
+    environment: { EE_KAFKA_BROKERS: "kafka:9092", EE_PRESIDIO_URL: "http://presidio:3000" }
     ports: ["${EE_OTLP_GRPC_PORT:-4317}:4317", "${EE_OTLP_HTTP_PORT:-4318}:4318"]
-    depends_on: { kafka: { condition: service_healthy } }
+    depends_on:
+      kafka: { condition: service_healthy }
+      presidio: { condition: service_healthy }
 
   ingest:
     <<: *collector

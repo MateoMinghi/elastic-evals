@@ -34,6 +34,8 @@ type Config struct {
 	PricesFile string `mapstructure:"prices_file"`
 	// How often the prices file is checked for changes (0: read once at start).
 	PricesReloadInterval time.Duration `mapstructure:"prices_reload_interval"`
+	// Large content goes to S3-compatible storage.
+	Blobs BlobsConfig `mapstructure:"blobs"`
 	// Basic auth for the OpenSearch security plugin.
 	Username string `mapstructure:"username"`
 	Password string `mapstructure:"password"`
@@ -48,6 +50,9 @@ var _ component.Config = (*Config)(nil)
 func (c *Config) Validate() error {
 	if c.HTTP.Endpoint == "" {
 		return errors.New("endpoint is required")
+	}
+	if c.Blobs.Endpoint != "" && c.Blobs.Bucket == "" {
+		return errors.New("blobs.bucket is required with blobs.endpoint")
 	}
 	if c.Content != "stage" && c.Content != "none" {
 		return errors.New(`content must be "stage" or "none"`)
@@ -64,6 +69,7 @@ func createDefaultConfig() component.Config {
 		PreviewChars:         200,
 		Content:              "stage",
 		PricesReloadInterval: time.Minute,
+		Blobs:                BlobsConfig{ThresholdBytes: 256 << 10, Region: "us-east-1"},
 		TimeoutConfig:        exporterhelper.NewDefaultTimeoutConfig(),
 		BackOffConfig:        configretry.NewDefaultBackOffConfig(),
 	}

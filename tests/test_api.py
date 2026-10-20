@@ -249,3 +249,22 @@ def test_sentry_webhooks(deployment):
     assert c.get("/v1/conversations", params={"size": 50}, headers=deployment["keys"]["viewer"]).json()["total"] == N
     log = c.get("/v1/audit-log", headers=deployment["keys"]["admin"]).json()
     assert {"calibration.promote", "annotation.submit"} <= {e["action"] for e in log}
+
+
+def test_prices_export_and_reprice(deployment):
+    c, k, os_ = deployment["client"], deployment["keys"]["admin"], deployment["os"]
+    cid = deployment["convs"][2]["id"]
+    before = c.get(f"/v1/conversations/{cid}", headers=k).json()["rollup"]
+    assert before.get("cost_usd", 0) == 0  # the demo model had no price at ingest
+    rows = [{"model_pattern": "^demo-model$", "start_date": "2020-01-01", "tiers": [{"input": 1.0, "output": 2.0}]}]
+    assert c.put("/v1/model-prices", json=rows, headers=k).json() == {"n": 1}
+    exported = c.get("/v1/model-prices/export", headers=k).json()
+    assert exported[0]["model_pattern"] == "^demo-model$" and exported[0]["tiers"] == rows[0]["tiers"]
+    out = c.post("/v1/reprice", json={"from": "2000-01-01"}, headers=k).json()
+    assert out == {"conversations": N, "repriced": N}
+    os_.refresh("traces")
+    after = c.get(f"/v1/conversations/{cid}", headers=k).json()["rollup"]
+    spans = [s for s in c.get(f"/v1/conversations/{cid}", headers=k).json()["spans"] if s.get("usage")]
+    want = sum(s["usage"]["input_tokens"] * 1.0 + s["usage"]["output_tokens"] * 2.0 for s in spans) / 1e6
+    assert after["cost_usd"] == pytest.approx(want) and after["price_ids"] and after["repriced_at"]
+    assert c.post("/v1/reprice", json={"from": "2000-01-01"}, headers=k).json()["repriced"] == 0  # idempotent

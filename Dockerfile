@@ -14,7 +14,7 @@ COPY ui/ ./
 RUN npm run build
 
 FROM ${REGISTRY}/python:3.13-slim
-ARG EXTRAS=service,otel,sentry,local
+ARG EXTRAS=service,otel,sentry,local,redaction,s3
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 EE_UI_DIR=/app/ui/dist HF_HOME=/models
 WORKDIR /app
 RUN --mount=type=secret,id=extra_ca,required=false \
@@ -26,6 +26,11 @@ RUN if echo "$EXTRAS" | grep -q local; then \
 COPY pyproject.toml README.md ./
 COPY elastic_evals/ elastic_evals/
 RUN pip install ".[${EXTRAS}]"
+# small spaCy models for the Presidio service (en, es)
+RUN if echo "$EXTRAS" | grep -q redaction; then \
+      V=$(python -c "import spacy; print('.'.join(spacy.__version__.split('.')[:2]))"); \
+      for m in en_core_web_sm es_core_news_sm; do \
+        pip install "https://github.com/explosion/spacy-models/releases/download/$m-$V.0/$m-$V.0-py3-none-any.whl"; done; fi
 # bake the default encoder into the image so workers start without network access
 RUN if echo "$EXTRAS" | grep -q local; then \
       python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-small')"; fi

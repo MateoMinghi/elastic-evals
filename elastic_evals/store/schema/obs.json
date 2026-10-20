@@ -49,6 +49,7 @@
       "has_payload": {"type": "boolean"},
       "internal": {"type": "boolean"},
       "eval_flag": {"type": "boolean"},
+      "redaction_failed": {"type": "boolean"},
       "sentry_event_id": {"type": "keyword"},
       "experiment_run_id": {"type": "keyword"},
       "experiment_item_id": {"type": "keyword"},

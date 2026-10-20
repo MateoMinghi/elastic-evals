@@ -10,6 +10,7 @@ Engine (no services needed):
 Services (OpenSearch, Postgres, Kafka; see deploy/):
   setup       [--pools shared] [--tenant acme --dedicated] [--admin-key]   indices, templates, ISM, schema
   serve       [--port 8000]                                                 API + UI
+  presidio    [--port 3000]                                                 PII analyzer for the gateway
   tracker     [--brokers localhost:9092] [--session-idle 300]               trace-complete signal
   worker      [--embed]                                                     evaluation workers
   replay      --data convs.jsonl --tenant acme [--endpoint http://localhost:4318]
@@ -171,6 +172,11 @@ def cmd_serve(a):
     uvicorn.run("elastic_evals.api:app", host=a.host, port=a.port, log_level="info")
 
 
+def cmd_presidio(a):
+    import uvicorn
+    uvicorn.run("elastic_evals.presidio_service:app", host=a.host, port=a.port, log_level="info")
+
+
 def cmd_tracker(a):
     from .tracker import Timing, run
     pg, _, _ = _stores()
@@ -319,6 +325,9 @@ def main(argv=None):
     sv = sub.add_parser("serve")
     sv.add_argument("--host", default="0.0.0.0")
     sv.add_argument("--port", type=int, default=8000)
+    ps = sub.add_parser("presidio", help="Presidio analyzer service for the gateway's redaction")
+    ps.add_argument("--host", default="0.0.0.0")
+    ps.add_argument("--port", type=int, default=3000)
     tr = sub.add_parser("tracker")
     tr.add_argument("--brokers", default=os.environ.get("EE_KAFKA_BROKERS", "localhost:9092"))
     tr.add_argument("--topic", default=os.environ.get("EE_KAFKA_TOPIC", "ee-spans"))
@@ -373,7 +382,7 @@ def main(argv=None):
         print_report(json.loads((Path(args.calib) / "calibration.json").read_text()))
         return 0
     handler = {"calibrate": cmd_calibrate, "run": cmd_run, "experiment": cmd_experiment, "synth": cmd_synth,
-               "setup": cmd_setup, "serve": cmd_serve, "tracker": cmd_tracker, "worker": cmd_worker,
+               "setup": cmd_setup, "serve": cmd_serve, "presidio": cmd_presidio, "tracker": cmd_tracker, "worker": cmd_worker,
                "replay": cmd_replay, "suite": cmd_suite, "register": cmd_register, "shadow": cmd_lifecycle,
                "promote": cmd_lifecycle, "reject": cmd_lifecycle, "drift": cmd_drift, "annotate": cmd_annotate,
                "reprice": cmd_reprice, "prices": cmd_prices}[args.cmd]
