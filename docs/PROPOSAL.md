@@ -282,6 +282,27 @@ To get valid confidence intervals from mixed human and automatic labels, use pre
 - **Gates:** thresholds per metric. Gates on critical metrics are absolute (zero false confirmations); the rest compare against a baseline run.
 - **Results** go into the same indices, so comparing an experiment with production is just a query.
 
+### 7.8 What the prototype changed and validated
+
+The `elastic_evals` prototype implements §7.3–7.6, minus the storage and UI. It was tested on synthetic banking conversations from three model families; see `experiments/results/ENGINE_SUMMARY.md`.
+
+**Result:** on a holdout from a model family never used in development, it matched the best single LLM judge on accuracy (93.5% against 92.8–93.1%). It did so at 34–39% lower cost than DeepSeek or Haiku alone, 2–4× lower latency, and with 64% of conversations never reaching an LLM.
+
+The tests forced four changes to the design above:
+
+1. **Choose routes jointly for the suite, not per question.**
+   - One hosted call answers every question of a conversation, so calibration picks *one set* of hosted evaluators (Jev or not, at most one LLM judge) and costs it per conversation.
+   - Per-question choices had picked three different judges and cost more than any single judge.
+2. **Escalate per conversation.** A conversation reaches a hosted layer if any of its questions needs it. The call then answers all of them, and the unneeded answers are stored as free shadow scores.
+3. **Set accuracy floors statistically, and let strictness vary.**
+   - A question's floor is its best calibration accuracy minus one smoothed standard error.
+   - A chain may demand stricter confidence (95–100%) from its cheap layers, so that rules and local models settle only what they are sure of.
+4. **The audit sample is the drift monitor.** Agreement between routed decisions and the audit judge, per question, caught a broken rule on new traffic (100% → 81%). The fix is then recalibration, or the rule.
+
+**Still to add:**
+- a latency budget in the policy. Recalibration once chose a 2.1 s judge;
+- calibration on human-labelled real traffic. Subjective checks such as frustration stay around 80–85% for every evaluator on messy data.
+
 ## 8. Retention and sampling
 
 | Data | Kept | Default retention |
