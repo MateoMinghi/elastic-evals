@@ -20,7 +20,7 @@ v0.2 implements the design end to end; see [DESIGN.md §14](docs/DESIGN.md#14-im
 | Single-node storage footprint and query latency | [LOAD.md](experiments/results/LOAD.md) |
 | No span lost when a cluster node dies mid-ingest; rollover by size | [CLUSTER.md](experiments/results/CLUSTER.md) |
 
-Everything in the design is built. Not yet proven: real traffic with human labels (run `python -m elastic_evals gate` on it: the phase-1 gate), OpenSearch at billions of spans, a live Sentry installation.
+Everything in the design is built. Not yet proven: real traffic with human labels (run `python -m elastic_evals gate` on it: the phase-1 gate), OpenSearch at billions of spans, a live Sentry installation. On the synthetic holdout the gate passes with `crossfit_folds: 5` and `floor_se: 0.5` ([GATE_PHASE1.md](experiments/results/GATE_PHASE1.md)).
 
 Beyond the cascade: trajectory and per-step (observation) checks, Presidio redaction at the gateway, S3 offload of very large content, re-pricing of stored spans, OpenSearch Dashboards saved objects, Hugging Face classifier and zero-shot evaluator adapters.
 

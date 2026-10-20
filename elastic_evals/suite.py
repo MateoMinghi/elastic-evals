@@ -42,6 +42,7 @@ class Policy:
     max_usd_per_1M_conv: float | None = None  # cost budget for the chosen hosted set
     languages: list[str] | None = None        # language slices that must each clear the floor
     crossfit_folds: int = 0                   # judge routes with thresholds tuned on other folds (0: in-sample)
+    floor_se: float = 1.0                     # floors sit this many standard errors below the best route
 
 
 @dataclass

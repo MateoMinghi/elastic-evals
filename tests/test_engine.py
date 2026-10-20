@@ -170,6 +170,19 @@ def test_unknown_policy_field_rejected():
         Suite.from_yaml(SUITE_YAML.replace("audit_rate: 0.5", "audit_rat: 0.5"))
 
 
+def test_floor_se_narrows_the_floor(suite):
+    from elastic_evals.calibrate import floor_of
+    assert floor_of(0.9, 300, 0.01, False, 0.5) > floor_of(0.9, 300, 0.01, False) > 0.9 - 0.03
+    assert floor_of(0.9, 300, 0.05, False, 0.5) == pytest.approx(0.85)  # tolerance still wins when wider
+    s = copy.deepcopy(suite)
+    s.policy.floor_se = 0.5
+    convs = make_convs(160, seed=3)
+    tight, _ = calibrate(s, convs, labels_of(convs))
+    loose, _ = calibrate(suite, convs, labels_of(convs))
+    for q, r in tight["report"].items():
+        assert r["floor"] >= loose["report"][q]["floor"] - 1e-12
+
+
 def test_build_respects_local_only(suite):
     s = copy.deepcopy(suite)
     s.policy.allow_hosted = False

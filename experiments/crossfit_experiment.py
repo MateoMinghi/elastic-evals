@@ -41,22 +41,23 @@ def main():
     c_set = load("synthetic_c.jsonl")
     client = OpenRouter()
     out = {}
-    for folds in (0, 5):
+    for folds, k in ((0, 1.0), (5, 1.0), (5, 0.5)):
         suite = Suite.load(ROOT.parent / "examples" / "banking_suite.yaml")
-        suite.policy.crossfit_folds = folds
+        suite.policy.crossfit_folds, suite.policy.floor_se = folds, k
+        name = f"crossfit={folds}" + ("" if k == 1.0 else f", floor_se={k}")
         cal, evs = calibrate(suite, dev, {(c["id"], q): v for c in dev for q, v in c["labels"].items()}, client)
         res = Engine(suite, cal, evs, audit=False).run(c_set)
         qs = [q.name for q in suite.questions]
         acc = {q: float(np.mean([r["decisions"][q] == c["labels"][q] for r, c in zip(res, c_set)])) for q in qs}
         rank = {e.id: e.rank for e in evs}
         gate = asyncio.run(phase1_async(suite, c_set, client, folds=5))
-        out[f"crossfit={folds}"] = {
+        out[name] = {
             "a_to_c": {"accuracy": acc, "mean": float(np.mean(list(acc.values()))), "routes": cal["routes"],
                        "hosted": cal["suite_choice"]["hosted"],
                        "usd_per_1M": 1e6 * float(np.mean([r["usd"] for r in res])),
                        "llm_share": float(np.mean([any(rank.get(e) == 3 for e in r["evaluators_called"]) for r in res]))},
             "gate_c": gate}
-        print(folds, out[f"crossfit={folds}"]["a_to_c"]["mean"], gate["passed"], flush=True)
+        print(name, out[name]["a_to_c"]["mean"], gate["passed"], flush=True)
     (ROOT / "results" / "crossfit.json").write_text(json.dumps(out, indent=1))
     qs = list(out["crossfit=0"]["a_to_c"]["accuracy"])
     lines = ["# Cross-fitted thresholds in calibration", "",

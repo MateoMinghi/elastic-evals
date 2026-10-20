@@ -6,8 +6,11 @@ out-of-fold, so their thresholds are never tuned on their own training data.
 
 Route choice is joint, because one hosted call answers every question of a conversation:
   1. For each question, the best achievable accuracy over all chains (rules -> local -> jev ->
-     one LLM judge) sets a floor: best minus max(policy.tolerance, one standard error);
-     critical questions use one standard error only, so noise-level gaps don't pick the route.
+     one LLM judge) sets a floor: best minus max(policy.tolerance, policy.floor_se standard errors);
+     critical questions use the standard errors only, so noise-level gaps don't pick the route.
+     A floor of one SE puts the cheapest qualifying route near the phase-1 gate's own line
+     (best single evaluator minus one SE on held-out labels), so it misses that gate about as
+     often as it clears it; floor_se 0.5 leaves headroom at a higher cost.
      Each language slice listed in policy.languages gets its own floor the same way.
   2. Each candidate set of hosted evaluators (Jev or not x at most one LLM judge) is tried:
      every question takes its cheapest chain inside that set that clears its floors, and the
@@ -83,9 +86,9 @@ def tune_threshold(ps, ys, target, multiclass=False):
     return best
 
 
-def floor_of(best, n, tolerance, critical):
+def floor_of(best, n, tolerance, critical, k=1.0):
     smoothed = (best * n + 1) / (n + 2)  # avoids a zero standard error at 0% or 100%
-    se = float(np.sqrt(smoothed * (1 - smoothed) / max(n, 1)))
+    se = k * float(np.sqrt(smoothed * (1 - smoothed) / max(n, 1)))
     return best - (se if critical else max(tolerance, se))
 
 
@@ -261,13 +264,13 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
         if not rows[q.name]:
             raise ValueError(f"no evaluator can answer question {q.name!r}")
         best = max(rows[q.name], key=lambda x: x[1]["accuracy"])[1]
-        floors[q.name] = (best["accuracy"], floor_of(best["accuracy"], best["n"], policy.tolerance, q.critical))
+        floors[q.name] = (best["accuracy"], floor_of(best["accuracy"], best["n"], policy.tolerance, q.critical, policy.floor_se))
         lang_floors[q.name] = {}
         for lg in policy.languages or []:
             accs = [(r["by_lang"][lg]["accuracy"], r["by_lang"][lg]["n"]) for _, r in rows[q.name] if lg in r["by_lang"]]
             if accs:
                 b, n = max(accs)
-                lang_floors[q.name][lg] = (b, floor_of(b, n, policy.tolerance, q.critical))
+                lang_floors[q.name][lg] = (b, floor_of(b, n, policy.tolerance, q.critical, policy.floor_se))
 
     def clears(q, r):
         if r["accuracy"] < floors[q.name][1] - 1e-9:
