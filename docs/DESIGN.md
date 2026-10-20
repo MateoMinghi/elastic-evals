@@ -309,6 +309,7 @@ elastic-evals fills the gaps in §2.1:
 4. **Ingest workers** (a second Collector deployment in Go: a Kafka receiver plus our OpenSearch exporter, §11):
    - normalise attributes and compute cost from `model_prices` (exclusive token buckets, tiers, start dates);
    - write `obs` (truncated, typed) and `stage` (full content, **verbatim**, kept a few days) documents with `op_type=create`, deterministic ids and routing by trace id; offsets are committed only after OpenSearch accepted the batch.
+   - Because offsets wait for OpenSearch, an ingest worker has one bulk request in flight per partition: **the topic's partitions are ingest's write concurrency**. With one partition a replicated 3-node cluster fell behind at 1,700 spans/s; with six it kept up at 2,900 (L28). Size partitions for the peak (6 or more).
 5. **The tracker** (Python, its own consumer group on the same topic) reads only ids, parents and timestamps and maintains `trace_tracker`. Spans are grouped by trace first, because usually only the root carries `gen_ai.conversation.id` and children arrive before it (§14, L16).
 6. **Evaluation workers** claim due conversations (`FOR UPDATE SKIP LOCKED`), rebuild them from `obs` + `stage`/`payload`, run the engine (§6), write scores, rollups and metrics, and take the retention decision (§7): kept content is copied from `stage` to `payload`.
 
@@ -612,15 +613,27 @@ The part Langfuse gives away for free, and the part we must build. Five screens;
 
 Each phase ends with a measurable gate.
 
-| Phase | Scope | Exit gate | Status (v0.2) |
+| Phase | Scope | Exit gate | Status (v0.3) |
 |---|---|---|---|
 | **0. Done** | Research; layer experiments; `elastic_evals` engine (suites, calibration, per-conversation runtime, audit/drift, local-only, CLI); synthetic sets A/B/C | On holdout C: matches the best single judge at lower cost and latency (✓) | ✓ |
 | **1. Real-traffic validation** | Collect ~200 real, anonymised agent conversations; label them through a simple annotation CLI; calibrate; add `max_ms_per_conv`; multi-class checks; per-language reporting | Engine within 1 SE of the best judge per check on real labels, or a documented reason per check | Tooling ✓ (annotation CLI and UI, budgets, multi-class, language floors, `gate` command). On the 300-conversation synthetic holdout the gate passes under the defaults with one documented reason (fee_mismatch, a cost trade-off), and on every check with `crossfit_folds: 5`, `floor_se: 0.5` ([GATE_PHASE1.md](../experiments/results/GATE_PHASE1.md)). **Still to run on ~200 real, human-labelled conversations** |
-| **2. Storage path + load test** | Collector config, Kafka, ingest workers, OpenSearch templates and ISM, Postgres schema, trace-complete tracker, `traces-*` rollups; replay synthetic traces at 2–3× target peak | Ingest latency, GB per million spans and dashboard times within budget, or switch the analytics sink | Built ✓; single-node load test ✓ ([LOAD.md](../experiments/results/LOAD.md)); 3-node failover and rollover ✓ ([CLUSTER.md](../experiments/results/CLUSTER.md)). **Gate open: needs a target peak and a production-sized cluster** |
+| **2. Storage path + load test** | Collector config, Kafka, ingest workers, OpenSearch templates and ISM, Postgres schema, trace-complete tracker, `traces-*` rollups; replay synthetic traces at 2–3× target peak | Ingest latency, GB per million spans and dashboard times within budget, or switch the analytics sink | ✓ At 2,900 spans/s (2.5× the target peak below) for 5 minutes on a replicated 3-node cluster: no span lost, ingest p95 21.7 s, `obs` 0.34 GB per million spans, UI p95 ≤ 0.4 s and full-text search p95 0.95 s during the load ([PHASE2.md](../experiments/results/PHASE2.md)). With e5 heads evaluating on the same 4-core VM, ingest fell behind; local heads are served separately (§11). Also: single-node load test ([LOAD.md](../experiments/results/LOAD.md)), 3-node failover and rollover ([CLUSTER.md](../experiments/results/CLUSTER.md)) |
 | **3. Engine as a service** | Evaluation workers on the stream; scores into `scores-*`; calibration lifecycle (candidate → shadow → active); drift alerts; eval-aware retention | Drift detection and recalibration work end to end on replayed traffic | ✓ The holdout replayed through the full path reproduces the engine exactly ([PIPELINE.md](../experiments/results/PIPELINE.md)); drift alerts, shadow comparison and promotion tested |
 | **4. Humans and offline** | Annotation queues with automatic filling; distillation loop; datasets and experiments; pytest plugin and CI gates; `synth` | A distilled head replaces judge calls on at least one check without breaching its floor | ✓ Frustration's route dropped the judge (e5 → Jev) and improved; −44% LLM calls overall ([DISTILL.md](../experiments/results/DISTILL.md)) |
 | **5. Sentry bridge** | Propagation guide; `before_send` helper; webhook bridge; External Issue links; quality-regression events | Click-through both ways on a demo; self-hosted proof of concept | ✓ Against self-hosted Sentry 25.7: 13 of 13 checks, click-through both ways in a browser, issue linked about 11 s after the exception ([SENTRY_POC.md](../experiments/results/SENTRY_POC.md)) |
 | **6. UI and governance** | The 5 screens; two-tier tenancy; audit log; Helm chart | First external tenant | Built ✓ (UI with Playwright tests, dedicated and pooled tenants, scoped API keys, audit log, compose and Helm). **Gate open: first tenant** |
+
+**Phase-2 target peak and budgets (set in v0.3).** The reference scale is the one this design sizes for, a billion spans a month: 386 spans/s on average, a **target peak of 1,160 spans/s** (3× the average), so the gate load is **2,900 spans/s** (2.5× peak), sustained for 5 minutes, through the real collectors into a replicated multi-node cluster while evaluation and queries run. Budgets at that load:
+
+| Measure | Budget |
+|---|---|
+| Ingest latency, span sent → searchable in `obs-*` (agent SDK batching included) | p95 ≤ 30 s, and no span lost |
+| `obs` storage | ≤ 1 GB per million spans (primary, after merge) |
+| UI queries (list, filter, detail, score summary) during the load | p95 ≤ 1 s |
+| Full-text search during the load | p95 ≤ 3 s |
+| OpenSearch Dashboards aggregations during the load | p95 ≤ 2 s |
+
+A deployment with a different scale reruns `experiments/phase2_gate.py --spans-per-s <2.5 × its peak>`.
 
 ---
 
@@ -685,6 +698,7 @@ Everything in §4–§11 exists and is tested. Tests: `pytest` (44: offline, and
 | L25 | On a 3-node cluster with one replica, killing a node mid-ingest lost no span (38,181 sent, 38,181 indexed); ISM rolled the write alias over and the cluster returned to green ([CLUSTER.md](../experiments/results/CLUSTER.md)) | Idempotent writes plus Kafka-held offsets make node loss a non-event for ingest |
 | L26 | On the synthetic holdout the phase-1 gate failed one check (fee_mismatch: 91.3% against 94.0%, SE 1.4). Calibration takes the cheapest route within one SE of the best on training data, and the gate rejects anything more than one SE below the best on held-out data, so a route chosen at the floor misses the gate about half the time. Cross-fitted thresholds alone moved it to 92.0%. Adding a floor at half an SE gave 92.7%, and every check passed, at $117 against $92 per 1M conversations ([GATE_PHASE1.md](../experiments/results/GATE_PHASE1.md)) | `crossfit_folds` and `floor_se` policy fields. Defaults favour cost; tenants who must clear the gate set `crossfit_folds: 5`, `floor_se: 0.5` |
 | L27 | A real Sentry broke the bridge in six ways the fake API could not: `issue.created` fires once per issue (later conversations come as `error.created`, regressions as `issue.unresolved`); one External Issue per issue; links by trace id; links arriving before evaluation were overwritten; errors raised in child spans lacked the conversation id; stored links had no URL ([SENTRY_POC.md](../experiments/results/SENTRY_POC.md)) | Test integrations against the real system early; the proof of concept is now a script (`experiments/sentry_poc.py`, `deploy/sentry-poc/`) |
+| L28 | The first sustained phase-2 run missed its latency budget (p95 44 s) because the Kafka topic had one partition: ingest commits offsets only after OpenSearch accepts a batch, so each partition has one bulk request in flight. Six partitions brought p95 to 22 s at 2,900 spans/s. A 1-minute run had hidden a slower backlog that a 5-minute run exposed, when the e5 heads shared the VM's CPU ([PHASE2.md](../experiments/results/PHASE2.md)) | Partitions are ingest's write concurrency (§5.2); load tests must be sustained, not bursts; keep local heads off the storage nodes |
 | L22 | One shared 4-core VM ingested 3,400 spans/s end to end and stored `obs` at about 320 MB per million spans (`zstd`, after merge); list views answered in 25–35 ms at p50, full-text search in about 240 ms; local-only evaluation ran at 16 conversations/s ([LOAD.md](../experiments/results/LOAD.md)) | At a billion spans a month that is about 320 GB of `obs` before replicas, before retention. Full-text search is the slow query (it resolves content hits to conversations in two steps): index the first user message and flags on `traces-*` for common searches. Local heads are the evaluation bottleneck on CPU: serve them with ONNX Runtime or TEI (§11) |
 
 ---
@@ -697,6 +711,8 @@ Everything in §4–§11 exists and is tested. Tests: `pytest` (44: offline, and
 - Distillation: [`DISTILL.md`](../experiments/results/DISTILL.md) (`experiments/distill_experiment.py`)
 - Load test: [`LOAD.md`](../experiments/results/LOAD.md) (`experiments/load_test.py`)
 - Multi-node cluster: [`CLUSTER.md`](../experiments/results/CLUSTER.md) (`experiments/cluster_test.py`)
+- Phase-2 gate at 2.5× the target peak: [`PHASE2.md`](../experiments/results/PHASE2.md) (`experiments/phase2_gate.py`)
+- Phase-5 gate against a self-hosted Sentry: [`SENTRY_POC.md`](../experiments/results/SENTRY_POC.md) (`experiments/sentry_poc.py`, `deploy/sentry-poc/`)
 - Phase-1 gate on the synthetic holdout: [`GATE_PHASE1.md`](../experiments/results/GATE_PHASE1.md) (`python -m elastic_evals gate`); cross-fitted thresholds and floors: [`CROSSFIT.md`](../experiments/results/CROSSFIT.md) (`experiments/crossfit_experiment.py`)
 - Code:
   - `elastic_evals/`: the engine

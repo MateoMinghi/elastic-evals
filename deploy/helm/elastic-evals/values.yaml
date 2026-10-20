@@ -6,7 +6,7 @@ opensearch:
   existingSecret: ""        # keys: username, password (security plugin basic auth)
 kafka:
   brokers: kafka:9092
-  topic: ee-spans
+  topic: ee-spans           # create it with 6+ partitions: they are ingest's write concurrency (DESIGN.md §5.2)
 postgres:
   existingSecret: ee-postgres   # key: dsn (postgresql://user:pass@host:5432/db)
 hosted:

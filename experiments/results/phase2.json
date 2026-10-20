@@ -1,0 +1,103 @@
+{
+ "target_spans_per_s": 2900.0,
+ "conversations": 68503,
+ "minutes": 5.0,
+ "senders": 4,
+ "partitions": 6,
+ "rules_only": true,
+ "workers": 2,
+ "nodes": 3,
+ "budget": {
+  "ingest_p95_s": 30.0,
+  "obs_gb_per_million_spans": 1.0,
+  "ui_p95_ms": 1000.0,
+  "search_p95_ms": 3000.0,
+  "dashboards_p95_ms": 2000.0
+ },
+ "spans": 871906,
+ "send_s": 300.078245639801,
+ "achieved_send_spans_per_s": 2905.5954994038207,
+ "indexed": 871906,
+ "drain_s": 20.083473682403564,
+ "latency_samples": 3426,
+ "latency_unseen": 0,
+ "ingest_latency_s": {
+  "p50": 7.711305141448975,
+  "p95": 21.699613332748413,
+  "p99": 24.374104261398315,
+  "max": 25.950655937194824
+ },
+ "query_latency_ms": {
+  "list (50, sorted, facets)": {
+   "kind": "ui",
+   "n": 133,
+   "p50": 78.42249300301773,
+   "p95": 253.0405269972107
+  },
+  "list filtered by flag": {
+   "kind": "ui",
+   "n": 133,
+   "p50": 59.31736500133411,
+   "p95": 160.8489889986231
+  },
+  "conversation detail": {
+   "kind": "ui",
+   "n": 133,
+   "p50": 124.75656999959028,
+   "p95": 397.52546700037783
+  },
+  "score summary (7 days)": {
+   "kind": "ui",
+   "n": 133,
+   "p50": 33.644472001469694,
+   "p95": 103.85750899877166
+  },
+  "full-text search": {
+   "kind": "search",
+   "n": 133,
+   "p50": 493.5744619979232,
+   "p95": 948.3318220009096
+  },
+  "Dashboards: LLM cost per day": {
+   "kind": "dashboards",
+   "n": 133,
+   "p50": 16.75015200089547,
+   "p95": 90.17096200113883
+  },
+  "Dashboards: errors by type": {
+   "kind": "dashboards",
+   "n": 133,
+   "p50": 11.25590599986026,
+   "p95": 65.45072100198013
+  },
+  "Dashboards: latency p50/p95 by model": {
+   "kind": "dashboards",
+   "n": 133,
+   "p50": 32.327132001228165,
+   "p95": 129.64612200084957
+  }
+ },
+ "evaluated": 6594,
+ "storage": {
+  "stage": {
+   "docs": 871906,
+   "bytes": 319997238
+  },
+  "obs": {
+   "docs": 871906,
+   "bytes": 295103936
+  }
+ },
+ "obs_gb_per_million_spans": 0.3384584301518741,
+ "stage_gb_per_million_spans": 0.367008872516074,
+ "gate": {
+  "load reached the target rate": true,
+  "no span lost": true,
+  "ingest latency p95 <= 30 s": true,
+  "obs <= 1.0 GB per million spans": true,
+  "UI queries p95 <= 1000 ms under load": true,
+  "full-text search p95 <= 3000 ms under load": true,
+  "Dashboards aggregations p95 <= 2000 ms under load": true
+ },
+ "passed": true
+}
