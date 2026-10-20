@@ -75,6 +75,16 @@ def test_pipeline_end_to_end(opensearch, postgres, collectors, tmp_path):
         tracker = asyncio.create_task(run_tracker(postgres, KAFKA, Timing(trace_idle_s=1, session_idle_s=2),
                                                   topic=collectors["topic"], group=f"t-{uuid.uuid4().hex[:6]}", stop=stop))
         worker = Worker(postgres, opensearch, reg, retry_s=1)
+        # a Sentry issue linked before evaluation (the usual order) must survive the rollup write
+        first, until = None, time.time() + 30
+        while first is None and time.time() < until:
+            opensearch.refresh("obs")
+            hits = opensearch.hits("obs", {"size": 1, "query": {"term": {"session_id": convs[0]["id"]}}}, "pipe")
+            first = hits[0]["trace_id"] if hits else None
+            await asyncio.sleep(0.2)
+        assert first, "no span of the first conversation was indexed"
+        postgres.exec("INSERT INTO sentry_links (tenant_id, trace_id, sentry_issue_id, status) VALUES ('pipe', %s, '77', 'unresolved')",
+                      first)
         deadline = time.time() + 90
         while time.time() < deadline:
             await worker.run_once()
@@ -91,6 +101,9 @@ def test_pipeline_end_to_end(opensearch, postgres, collectors, tmp_path):
                           "WHERE status <> 'evaluated' AND tenant_id='pipe'")
     assert not errors, errors
     opensearch.refresh()
+
+    linked = opensearch.hits("traces", {"query": {"term": {"conversation_id": convs[0]["id"]}}}, "pipe")[0]
+    assert linked["sentry_issue_ids"] == ["77"] and linked["sentry_status"] == "unresolved"
 
     # every span landed once, in the tenant's dedicated pool
     assert opensearch.count("obs", pool="pipe") == n_spans

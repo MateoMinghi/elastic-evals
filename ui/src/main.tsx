@@ -27,6 +27,7 @@ function Layout() {
       <main>
         <Routes>
           <Route path="/" element={<Conversations />} />
+          <Route path="/conversations" element={<Conversations />} />
           <Route path="/conversations/:id" element={<Conversation />} />
           <Route path="/scores" element={<Scores />} />
           <Route path="/calibrations/:id" element={<Calibration />} />

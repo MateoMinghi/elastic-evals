@@ -61,7 +61,7 @@ export function Conversation() {
   return (
     <>
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <h1 className="mono" style={{ fontSize: 16 }}>{id}</h1>
+        <h1 className="mono" style={{ fontSize: 16 }}>{data.rollup?.conversation_id ?? id}</h1>
         <Link to="/">← all conversations</Link>
       </div>
       <div className="row small muted" style={{ marginBottom: 12 }}>

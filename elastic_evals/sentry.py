@@ -7,6 +7,7 @@ Agent side:
     from elastic_evals.sentry import before_send
     sentry_sdk.init(dsn=..., before_send=before_send(ui_url="https://evals.example.com"),
                     send_default_pii=False)       # no traces_sample_rate: OTel owns tracing
+    # (call it after the OTel tracer provider is set, or pass tracer_provider=)
 
   `before_send` tags the event with the active OTel trace id, conversation id and agent, adds a
   deep link, writes `ee.sentry.event_id` on the active span and marks it ERROR (a handled
@@ -15,8 +16,10 @@ Agent side:
 Server side (the bridge, mounted on the API when EE_SENTRY_CLIENT_SECRET is set):
   POST /v1/sentry/webhook   HMAC-verified Sentry integration webhooks:
       installation          remembers the installation uuid
-      event_alert / issue   links the issue to its trace (sentry_links, traces-* rollup) and
-                            creates an External Issue link ("View agent trace") on the issue
+      issue / error /       links the issue to its trace (sentry_links, traces-* rollup) and
+      event_alert           creates an External Issue link ("View agent trace") on the issue;
+                            subscribe to both issue and error: issue.created fires once per issue,
+                            error.created for every event (each later conversation that hits it)
       issue resolved/...    copies the issue status back
   quality_regression()      drift alerts become Sentry messages with a stable fingerprint per
                             check, suite and tenant, so Sentry alerting covers quality
@@ -35,8 +38,44 @@ log = logging.getLogger("elastic_evals.sentry")
 
 
 # -- agent side ------------------------------------------------------------------------------------
-def before_send(ui_url: str | None = None, tenant_id: str | None = None):
+try:
+    from opentelemetry.sdk.trace import SpanProcessor as _SpanProcessor
+except ImportError:  # the server side does not need the OTel SDK
+    _SpanProcessor = object
+
+
+class ConversationIndex(_SpanProcessor):
+    """OTel span processor remembering each trace's conversation id and agent name. Usually only the
+    root span carries them, and errors are raised in child spans (tool calls, model calls)."""
+
+    def __init__(self, size: int = 10000):
+        from collections import OrderedDict
+        self.size, self.by_trace = size, OrderedDict()
+
+    def on_start(self, span, parent_context=None):
+        attrs = span.attributes or {}
+        conv, agent = attrs.get("gen_ai.conversation.id"), attrs.get("gen_ai.agent.name")
+        if conv or agent:
+            tid = span.get_span_context().trace_id
+            old = self.by_trace.pop(tid, (None, None))
+            self.by_trace[tid] = (conv or old[0], agent or old[1])
+            while len(self.by_trace) > self.size:
+                self.by_trace.popitem(last=False)
+
+    def get(self, trace_id: int):
+        return self.by_trace.get(trace_id, (None, None))
+
+
+
+def before_send(ui_url: str | None = None, tenant_id: str | None = None, tracer_provider=None):
+    """`tracer_provider` (default: the global one) gets a ConversationIndex, so events raised in child
+    spans still carry the conversation id and agent."""
     from opentelemetry import trace
+
+    index = ConversationIndex()
+    provider = tracer_provider or trace.get_tracer_provider()
+    if hasattr(provider, "add_span_processor"):
+        provider.add_span_processor(index)
 
     def hook(event, hint):
         span = trace.get_current_span()
@@ -45,8 +84,9 @@ def before_send(ui_url: str | None = None, tenant_id: str | None = None):
             return event
         trace_id = format(ctx.trace_id, "032x")
         attrs = getattr(span, "attributes", None) or {}
-        conv = attrs.get("gen_ai.conversation.id")
-        agent = attrs.get("gen_ai.agent.name")
+        known_conv, known_agent = index.get(ctx.trace_id)
+        conv = attrs.get("gen_ai.conversation.id") or known_conv
+        agent = attrs.get("gen_ai.agent.name") or known_agent
         tags = event.setdefault("tags", {})
         tags["trace_id"] = trace_id
         if conv:
@@ -78,8 +118,9 @@ def verify(secret: str, body: bytes, signature: str | None) -> bool:
 class Bridge:
     def __init__(self, client_secret: str, token: str | None = None, base_url: str = "https://sentry.io",
                  org: str | None = None, ui_url: str | None = None, installation: str | None = None,
-                 http: httpx.Client | None = None, default_tenant: str | None = None):
+                 http: httpx.Client | None = None, default_tenant: str | None = None, web_url: str | None = None):
         self.secret, self.token, self.base = client_secret, token, base_url.rstrip("/")
+        self.web = (web_url or base_url).rstrip("/")  # what a browser reaches, when the API URL is internal
         self.org, self.ui_url, self.installation = org, ui_url, installation
         self.http = http or httpx.Client(timeout=10)
         self.default_tenant = default_tenant
@@ -90,7 +131,10 @@ class Bridge:
         return cls(os.environ["EE_SENTRY_CLIENT_SECRET"], os.environ.get("EE_SENTRY_TOKEN"),
                    os.environ.get("EE_SENTRY_URL", "https://sentry.io"), os.environ.get("EE_SENTRY_ORG"),
                    os.environ.get("EE_UI_URL"), os.environ.get("EE_SENTRY_INSTALLATION"),
-                   default_tenant=os.environ.get("EE_SENTRY_DEFAULT_TENANT"))
+                   default_tenant=os.environ.get("EE_SENTRY_DEFAULT_TENANT"), web_url=os.environ.get("EE_SENTRY_WEB_URL"))
+
+    def issue_url(self, issue_id) -> str | None:
+        return f"{self.web}/organizations/{self.org}/issues/{issue_id}/" if self.org else None
 
     def _api(self, method, path, **kw):
         if not self.token:
@@ -137,8 +181,10 @@ class Bridge:
             try:
                 self._api("POST", f"sentry-app-installations/{self.installation}/external-issues/", json={
                     "issueId": int(issue_id) if issue_id.isdigit() else issue_id,
-                    "webUrl": f"{self.ui_url.rstrip('/')}/conversations/{trace_id}?by=trace",
-                    "project": "elastic-evals", "identifier": f"trace {trace_id[:12]}"})
+                    # Sentry keeps one External Issue per issue and integration, so it opens every
+                    # conversation linked to the issue rather than the first trace
+                    "webUrl": f"{self.ui_url.rstrip('/')}/conversations?sentry_issue={issue_id}",
+                    "project": "elastic-evals", "identifier": "agent conversations"})
                 pg.exec("UPDATE sentry_links SET external_issue_created=true WHERE tenant_id=%s AND trace_id=%s AND sentry_issue_id=%s",
                         tenant, trace_id, issue_id)
             except (httpx.HTTPError, RuntimeError) as exc:
@@ -173,8 +219,10 @@ class Bridge:
             inst = payload.get("installation") or data.get("installation") or {}
             self.installation = inst.get("uuid") or self.installation
             return {"installation": self.installation}
-        if resource == "event_alert":
-            event = data.get("event") or {}
+        if resource in ("event_alert", "error"):
+            # error.created arrives for every error event, including new events of an existing issue
+            # (issue.created fires once per issue, so it alone misses every later conversation)
+            event = data.get("event") or data.get("error") or {}
             tags = self._tags(event)
             trace_id = tags.get("trace_id") or ((event.get("contexts") or {}).get("trace") or {}).get("trace_id")
             issue = {"id": event.get("issue_id") or event.get("groupID"), "status": "unresolved",
@@ -184,12 +232,17 @@ class Bridge:
             return {"linked": bool(ok)}
         if resource == "issue":
             issue = data.get("issue") or {}
-            if action == "created":
-                trace_id, tenant, event_id = self._trace_of_issue(issue.get("id"))
-                return {"linked": self.link(pg, registry, os_, trace_id, issue, tenant, event_id)}
+            out = {}
             if action in ("resolved", "ignored", "unresolved", "archived"):
                 status = {"archived": "ignored"}.get(action, action)
-                return {"updated": self.set_status(pg, registry, os_, issue.get("id"), status)}
+                out["updated"] = self.set_status(pg, registry, os_, issue.get("id"), status)
+            if action in ("created", "unresolved"):
+                # a new issue, or a regression: link the conversation of the event that opened it
+                # (Sentry need not send error.created for a regression event)
+                trace_id, tenant, event_id = self._trace_of_issue(issue.get("id"))
+                out["linked"] = self.link(pg, registry, os_, trace_id, dict(issue, status="unresolved"), tenant, event_id)
+            if out:
+                return out
             return {"ignored": action}
         return {"ignored": resource}
 
@@ -235,6 +288,9 @@ class Bridge:
                 raise HTTPException(401, "bad signature")
             resource = request.headers.get("sentry-hook-resource", "")
             from starlette.concurrency import run_in_threadpool
-            return await run_in_threadpool(self.handle, pg, registry, os_, resource, json.loads(body or b"{}"))
+            payload = json.loads(body or b"{}")
+            result = await run_in_threadpool(self.handle, pg, registry, os_, resource, payload)
+            log.info("sentry webhook %s.%s -> %s", resource, payload.get("action"), result)
+            return result
 
         return r

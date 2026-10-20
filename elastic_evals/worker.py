@@ -216,6 +216,12 @@ class Worker:
                 "scores": score_map,
                 "content_kept": keep, "retention_reasons": reasons,
             })
+            # the rollup is rewritten whole: carry the Sentry links, which often arrive before evaluation
+            links = self.pg.all("SELECT sentry_issue_id, status FROM sentry_links WHERE tenant_id=%s AND trace_id = ANY(%s) "
+                                "ORDER BY updated_at", tenant, conv["trace_ids"])
+            if links:
+                doc["sentry_issue_ids"] = sorted({lk["sentry_issue_id"] for lk in links})
+                doc["sentry_status"] = links[-1]["status"]
             doc = {k: v for k, v in doc.items() if v is not None}
             by_pool[pool]["traces"].append((conv["id"], doc, None))
             by_pool[pool]["scores"] += [(s["id"], s, None) for s in sc]

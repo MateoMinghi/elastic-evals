@@ -239,13 +239,30 @@ def test_sentry_webhooks(deployment):
     assert c.post("/v1/sentry/webhook", content=raw, headers={"sentry-hook-signature": "bad", "sentry-hook-resource": "issue"}).status_code == 401
     r = c.post("/v1/sentry/webhook", content=raw, headers={"sentry-hook-signature": sig, "sentry-hook-resource": "issue"})
     assert r.json() == {"linked": True}
-    assert any(p.endswith("/external-issues/") and b["webUrl"].endswith(f"{trace}?by=trace") for _, p, b in fake.calls)
+    assert any(p.endswith("/external-issues/") and b["webUrl"].endswith("/conversations?sentry_issue=123") for _, p, b in fake.calls)
     raw, sig = _signed({"action": "resolved", "data": {"issue": {"id": "123"}}})
     assert c.post("/v1/sentry/webhook", content=raw, headers={"sentry-hook-signature": sig,
                                                               "sentry-hook-resource": "issue"}).json() == {"updated": 1}
     detail = c.get(f"/v1/conversations/{cid}", headers=deployment["keys"]["viewer"]).json()
     assert detail["rollup"]["sentry_issue_ids"] == ["123"] and detail["rollup"]["sentry_status"] == "resolved"
     assert detail["sentry"][0]["status"] == "resolved"
+    assert detail["sentry"][0]["permalink"] == "https://sentry.test/organizations/org/issues/123/"
+    # a later event of the same issue in another conversation arrives as error.created
+    cid2 = deployment["convs"][3]["id"]
+    trace2 = c.get(f"/v1/conversations/{cid2}", headers=deployment["keys"]["viewer"]).json()["rollup"]["trace_ids"][0]
+    raw, sig = _signed({"action": "created", "data": {"error": {"issue_id": "123", "event_id": "e2", "project": 2,
+                                                                "tags": [["trace_id", trace2], ["ee.tenant_id", "acme"]]}}})
+    assert c.post("/v1/sentry/webhook", content=raw, headers={"sentry-hook-signature": sig,
+                                                              "sentry-hook-resource": "error"}).json() == {"linked": True}
+    by_trace = c.get(f"/v1/conversations/{trace2}", headers=deployment["keys"]["viewer"]).json()  # Sentry links by trace
+    assert by_trace["rollup"]["conversation_id"] == cid2 and by_trace["sentry"][0]["sentry_issue_id"] == "123"
+    linked = c.get("/v1/conversations", params={"sentry_issue": "123"}, headers=deployment["keys"]["viewer"]).json()
+    assert {i["conversation_id"] for i in linked["items"]} == {cid, cid2}
+    # a regression reopens the issue: status follows, and the reopening event's conversation is linked
+    raw, sig = _signed({"action": "unresolved", "data": {"issue": {"id": "123"}}})
+    assert c.post("/v1/sentry/webhook", content=raw, headers={"sentry-hook-signature": sig,
+                                                              "sentry-hook-resource": "issue"}).json() == {"updated": 2, "linked": True}
+    assert c.get(f"/v1/conversations/{cid}", headers=deployment["keys"]["viewer"]).json()["rollup"]["sentry_status"] == "unresolved"
     assert c.get("/v1/conversations", params={"size": 50}, headers=deployment["keys"]["viewer"]).json()["total"] == N
     log = c.get("/v1/audit-log", headers=deployment["keys"]["admin"]).json()
     assert {"calibration.promote", "annotation.submit"} <= {e["action"] for e in log}

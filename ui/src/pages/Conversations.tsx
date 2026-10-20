@@ -17,6 +17,7 @@ export function Conversations() {
     lang: params.get("lang") || undefined,
     error: params.get("error") || undefined,
     experiment: params.get("experiment") || undefined,
+    sentry_issue: params.get("sentry_issue") || undefined,
     size: 50,
     search_after: cursor || undefined,
   };
@@ -34,6 +35,12 @@ export function Conversations() {
   return (
     <>
       <h1>Conversations</h1>
+      {params.get("sentry_issue") && (
+        <div className="row small" style={{ marginBottom: 8 }}>
+          Linked to Sentry issue {params.get("sentry_issue")}{" "}
+          <button onClick={() => toggle("sentry_issue", params.get("sentry_issue") || "")}>clear</button>
+        </div>
+      )}
       <form
         className="row"
         onSubmit={(e) => {

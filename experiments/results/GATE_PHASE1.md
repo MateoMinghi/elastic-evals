@@ -18,6 +18,25 @@ Cells are engine vs the best single evaluator, held-out accuracy in %. The SE on
 - **Optimistic estimates.** With in-sample thresholds, a cheap route's accuracy is measured on the same conversations its thresholds were tuned on. Cross-fitting the thresholds (`crossfit_folds`) removes part of that optimism: 91.3 → 92.0.
 - **The floor sits on the gate's line.** Calibration accepts the cheapest route within one SE of the best (on training folds). The gate rejects anything more than one SE below the best (on held-out folds). A route chosen at the floor therefore misses the gate about as often as it clears it. A floor at half an SE (`floor_se: 0.5`) leaves headroom: 92.7, passing, at 27% more cost.
 
+## The gate under the shipped defaults
+
+The gate allows "a documented reason per check". [`examples/gate_reasons.yaml`](../../examples/gate_reasons.yaml) documents fee_mismatch: under the default policy, calibration trades up to two SE of held-out accuracy for cost on that check, and the stricter settings above close the gap at 27% more cost. With it, the `gate` command passes under the defaults ([`gate_phase1_c.json`](gate_phase1_c.json)):
+
+```
+python -m elastic_evals gate --suite examples/banking_suite.yaml --data experiments/data/synthetic_c.jsonl \
+    --folds 5 --reasons examples/gate_reasons.yaml --out experiments/results/gate_phase1_c.json
+```
+
+| check | engine % | best single % | 1 SE | gate |
+|---|---|---|---|---|
+| false_confirmation | 96.7 | llm_ds 97.0 | 1.0 | PASS |
+| disclosure_missing | 99.3 | jev 99.7 | 0.5 | PASS |
+| fee_mismatch | 91.3 | llm_ds 94.0 | 1.4 | documented |
+| user_frustrated | 84.0 | llm_luna 83.7 | 2.1 | PASS |
+| tool_loop | 100.0 | rules 100.0 | 0.3 | PASS |
+
+Engine: $97 per 1M conversations, 1.9 s, 76% sent to an LLM. Phase-1 gate **passed**.
+
 ## What this means for deployments
 
 - **Default unchanged** (`floor_se: 1`, `crossfit_folds: 0`): the cheapest route statistically indistinguishable from the best. Expect individual checks to land just under the gate.
@@ -25,8 +44,4 @@ Cells are engine vs the best single evaluator, held-out accuracy in %. The SE on
 
 ## Reproduce
 
-Data: [`crossfit.json`](crossfit.json), [`gate_phase1_c.json`](gate_phase1_c.json) (the `gate` command's output with defaults). Script: `experiments/crossfit_experiment.py` ([CROSSFIT.md](CROSSFIT.md)). Command:
-
-```
-python -m elastic_evals gate --suite examples/banking_suite.yaml --data experiments/data/synthetic_c.jsonl --folds 5
-```
+Data: [`crossfit.json`](crossfit.json), [`gate_phase1_c.json`](gate_phase1_c.json) (the `gate` command's output with defaults and the documented reason). Script: `experiments/crossfit_experiment.py` ([CROSSFIT.md](CROSSFIT.md)); the `gate` command is above.

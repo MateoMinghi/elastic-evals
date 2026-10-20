@@ -1,5 +1,5 @@
 {
- "passed": false,
+ "passed": true,
  "folds": 5,
  "n": 300,
  "checks": {
@@ -44,7 +44,7 @@
    "se": 0.01401852911387066,
    "n": 300,
    "pass": false,
-   "reason": null,
+   "reason": "Cost trade-off by policy. With the default floor (one SE below the best route) calibration routes fee_mismatch through Jev before Haiku, which lands up to two SE below Haiku alone on held-out data (synthetic holdout C: 91.3% against 94.0%, SE 1.4). Setting crossfit_folds 5 and floor_se 0.5 closes the gap (92.7%, passing) at 27% more cost per conversation; see experiments/results/GATE_PHASE1.md.",
    "singles": {
     "rules": 0.8233333333333334,
     "e5": 0.5466666666666666,
@@ -90,6 +90,6 @@
   }
  },
  "engine_usd_per_1M": 96.56100666666667,
- "engine_ms": 1922.2255105000113,
+ "engine_ms": 1866.2674027699663,
  "engine_llm_share": 0.7633333333333333
 }

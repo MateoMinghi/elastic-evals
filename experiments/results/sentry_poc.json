@@ -1,0 +1,38 @@
+{
+ "conversation_id": "poc-1792536098",
+ "trace_id": "925a4eccd5fef7a6fbd8d7887b7c9d41",
+ "event_id": "c44ee607e6194fd492b0c052673f919d",
+ "checks": {
+  "conversation evaluated": true,
+  "event tagged with the trace id": true,
+  "event tagged with the conversation id": true,
+  "event carries our deep link": true,
+  "no conversation content in Sentry": true,
+  "webhook linked issue to trace": true,
+  "External Issue on the Sentry issue opens our conversations for that issue": true,
+  "our API returns the issue with a Sentry permalink": true,
+  "traces-* rollup carries the issue id": true,
+  "click: our conversation -> Sentry issue": true,
+  "click: Sentry issue -> our conversations for that issue -> the conversation": true,
+  "resolving in Sentry updates our rollup": true,
+  "drift alert is a Sentry issue, tagged by check": true
+ },
+ "link_s_after_capture": 10.9,
+ "external_issue": [
+  {
+   "id": "1",
+   "issueId": "1",
+   "serviceType": "elastic-evals-ef8e2f",
+   "displayName": "elastic-evals#agent conversations",
+   "webUrl": "http://localhost:8001/conversations?sentry_issue=1"
+  }
+ ],
+ "conversations_listed_for_issue": 1,
+ "external_issue_href": "http://localhost:8001/conversations?sentry_issue=1",
+ "drift_issue": {
+  "id": "2",
+  "title": "Evaluator drift: user_frustrated agreement 71.0% (baseline 88.0%)"
+ },
+ "issue_id": "1",
+ "passed": true
+}

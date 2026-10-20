@@ -1,0 +1,7 @@
+# Documented reasons a check may miss the phase-1 gate (DESIGN.md §12):
+#   python -m elastic_evals gate --suite examples/banking_suite.yaml --data labelled.jsonl --reasons examples/gate_reasons.yaml
+fee_mismatch: >-
+  Cost trade-off by policy. With the default floor (one SE below the best route) calibration routes
+  fee_mismatch through Jev before Haiku, which lands up to two SE below Haiku alone on held-out data
+  (synthetic holdout C: 91.3% against 94.0%, SE 1.4). Setting crossfit_folds 5 and floor_se 0.5 closes
+  the gap (92.7%, passing) at 27% more cost per conversation; see experiments/results/GATE_PHASE1.md.

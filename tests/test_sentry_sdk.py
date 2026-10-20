@@ -60,17 +60,19 @@ def test_sdk_events_link_to_traces_and_carry_no_content(ingest):
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer("agent")
-    sentry_sdk.init(dsn=f"http://public@127.0.0.1:{ingest}/1", before_send=before_send(ui_url="https://ui.test", tenant_id="acme"),
+    sentry_sdk.init(dsn=f"http://public@127.0.0.1:{ingest}/1",
+                    before_send=before_send(ui_url="https://ui.test", tenant_id="acme", tracer_provider=provider),
                     send_default_pii=False, default_integrations=False)
     try:
         with tracer.start_as_current_span("invoke_agent bank", attributes={
                 "gen_ai.conversation.id": "conv-9", "gen_ai.agent.name": "bank",
                 "gen_ai.input.messages": json.dumps([{"role": "user", "parts": [{"type": "text", "content": SECRET}]}])}) as span:
             trace_id = format(span.get_span_context().trace_id, "032x")
-            try:
-                raise ValueError("transfer service unavailable")
-            except ValueError:
-                event_id = sentry_sdk.capture_exception()
+            with tracer.start_as_current_span("execute_tool transfer"):  # raised in a child span, as usual
+                try:
+                    raise ValueError("transfer service unavailable")
+                except ValueError:
+                    event_id = sentry_sdk.capture_exception()
         Bridge("s").quality_regression({"tenant_id": "acme", "suite_id": "banking", "check_name": "user_frustrated",
                                         "lang": "es", "baseline": 0.88, "observed": 0.71, "n": 120, "calibration_id": "cal_1"})
         sentry_sdk.flush(5)
@@ -79,10 +81,10 @@ def test_sdk_events_link_to_traces_and_carry_no_content(ingest):
     events = [e for env in Ingest.envelopes for e in items(env)]
     exc = next(e for e in events if e.get("exception"))
     assert exc["tags"]["trace_id"] == trace_id and exc["tags"]["gen_ai.conversation.id"] == "conv-9"
-    assert exc["tags"]["ee.tenant_id"] == "acme"
+    assert exc["tags"]["ee.tenant_id"] == "acme" and exc["tags"]["gen_ai.agent.name"] == "bank"
     assert exc["contexts"]["elastic_evals"]["url"] == "https://ui.test/conversations/conv-9"
     assert SECRET not in "".join(Ingest.envelopes)  # content never reaches Sentry
-    done = exporter.get_finished_spans()[0]
+    done = next(s for s in exporter.get_finished_spans() if s.name == "execute_tool transfer")
     assert done.attributes["ee.sentry.event_id"] == event_id and done.status.status_code == StatusCode.ERROR
     msg = next(e for e in events if e.get("message") or e.get("logentry"))
     assert msg["fingerprint"] == ["ee-quality", "acme", "banking", "user_frustrated", "es"]

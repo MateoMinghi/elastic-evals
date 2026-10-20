@@ -520,18 +520,21 @@ The retention decision is taken **after** the engine runs. Evaluators see all co
 
 ## 8. Sentry integration
 
-Based on [`research/sentry.md`](research/sentry.md). Built in v0.2 (`elastic_evals/sentry.py`) and tested with the real Sentry SDK against a local ingest endpoint and a fake Sentry API; not yet against a live installation.
+Based on [`research/sentry.md`](research/sentry.md). Built in v0.2 (`elastic_evals/sentry.py`); proven against a self-hosted Sentry 25.7 in v0.3, with click-through both ways in a browser ([SENTRY_POC.md](../experiments/results/SENTRY_POC.md), L27).
 
 - **Division of work:** Sentry handles exceptions, alerting and the issue workflow. elastic-evals handles traces, content, scores and evaluation. They share **one W3C trace id** (Sentry trace ids are the same 32-hex value as OTel's).
 - **Propagation:** the Sentry SDK's `OTLPIntegration` puts the active OTel trace and span ids on every Sentry event.
   - Set `OTEL_PROPAGATORS=tracecontext,baggage` and `setup_propagator=False`. Sentry's propagator otherwise writes `sentry-trace` (unverified).
   - Don't set `traces_sample_rate`.
 - **Sentry → our trace:**
-  - In `before_send`, tag the event with `trace_id`, `gen_ai.conversation.id`, `gen_ai.agent.name` and a deep-link context.
+  - In `before_send`, tag the event with `trace_id`, `gen_ai.conversation.id`, `gen_ai.agent.name` and a deep-link context. Errors are raised in child spans, which don't carry the conversation id, so a span processor (`ConversationIndex`) remembers it per trace.
   - In the same hook, write `ee.sentry.event_id` on the active span **and mark it ERROR**. Otherwise a handled exception leaves the span OK and its content may be dropped.
-  - The **bridge** receives HMAC-signed issue and alert webhooks and calls the External Issue API (`POST /api/0/sentry-app-installations/{uuid}/external-issues/`). That puts a clickable "View agent trace" on the issue.
+  - The **bridge** receives HMAC-signed webhooks from an internal integration subscribed to **issue and error** events: `issue.created` fires once per issue, `error.created` for every later event (each further conversation that hits the issue), `issue.unresolved` for a regression. Each links the event's trace to the issue.
+  - It calls the External Issue API (`POST /api/0/sentry-app-installations/{uuid}/external-issues/`). Sentry keeps one External Issue per issue and integration, so the link opens our conversation list filtered to the issue (`/conversations?sentry_issue=<id>`), not a single trace.
+  - Links usually arrive before the conversation is evaluated; the worker carries them into every rollup it writes.
 - **Our trace → Sentry:**
   - Read `ee.sentry.event_id`, falling back to a cached `issues?query=trace:<id>` lookup (partly undocumented, so degrade gracefully).
+  - The conversation page lists linked issues with their Sentry permalink (`EE_SENTRY_WEB_URL` when the API URL is internal). Our API resolves a trace id to its conversation, since Sentry links by trace.
   - The bridge copies issue status back into `traces-*` and `sentry_links`.
 - **Quality regressions into Sentry:** only aggregated threshold breaches from the drift monitor and the check rates, using `capture_message` with a stable fingerprint per check, agent and tenant. Sentry's alerting and on-call routing then cover quality. Cron check-ins cover scheduled calibration jobs.
 - **Never sent to Sentry:**
@@ -542,7 +545,7 @@ Based on [`research/sentry.md`](research/sentry.md). Built in v0.2 (`elastic_eva
 
   As a backstop: redaction at the Collector, `send_default_pii=false`, and Sentry scrubbing rules on `$span.data.*`.
 - **Sampling consistency:** `always_on` at the SDK. The Collector's tail sampler keeps `status=ERROR`, `ee.sentry.event_id` and flagged traces, with a larger `decision_wait` and the decision cache enabled. Our retention decision (§7) is the final word.
-- **Self-hosted Sentry:** start errors-only. OTLP ingest and AI Agents Insights on self-hosted are unproven and need a proof of concept. Self-hosted needs 16+ GB RAM, more with spans.
+- **Self-hosted Sentry:** start errors-only. OTLP ingest and AI Agents Insights on self-hosted are unproven and need a proof of concept. Self-hosted needs 16+ GB RAM, more with spans. The errors-only proof of concept (`deploy/sentry-poc/`) ran web, worker, two consumers, Snuba, ClickHouse and Relay on a shared 16 GB VM.
 
 ---
 
@@ -612,11 +615,11 @@ Each phase ends with a measurable gate.
 | Phase | Scope | Exit gate | Status (v0.2) |
 |---|---|---|---|
 | **0. Done** | Research; layer experiments; `elastic_evals` engine (suites, calibration, per-conversation runtime, audit/drift, local-only, CLI); synthetic sets A/B/C | On holdout C: matches the best single judge at lower cost and latency (✓) | ✓ |
-| **1. Real-traffic validation** | Collect ~200 real, anonymised agent conversations; label them through a simple annotation CLI; calibrate; add `max_ms_per_conv`; multi-class checks; per-language reporting | Engine within 1 SE of the best judge per check on real labels, or a documented reason per check | Tooling ✓ (annotation CLI and UI, budgets, multi-class, language floors, `gate` command; on the synthetic holdout it passes with `crossfit_folds: 5`, `floor_se: 0.5`, see [GATE_PHASE1.md](../experiments/results/GATE_PHASE1.md)). **Gate open: needs real conversations** |
+| **1. Real-traffic validation** | Collect ~200 real, anonymised agent conversations; label them through a simple annotation CLI; calibrate; add `max_ms_per_conv`; multi-class checks; per-language reporting | Engine within 1 SE of the best judge per check on real labels, or a documented reason per check | Tooling ✓ (annotation CLI and UI, budgets, multi-class, language floors, `gate` command). On the 300-conversation synthetic holdout the gate passes under the defaults with one documented reason (fee_mismatch, a cost trade-off), and on every check with `crossfit_folds: 5`, `floor_se: 0.5` ([GATE_PHASE1.md](../experiments/results/GATE_PHASE1.md)). **Still to run on ~200 real, human-labelled conversations** |
 | **2. Storage path + load test** | Collector config, Kafka, ingest workers, OpenSearch templates and ISM, Postgres schema, trace-complete tracker, `traces-*` rollups; replay synthetic traces at 2–3× target peak | Ingest latency, GB per million spans and dashboard times within budget, or switch the analytics sink | Built ✓; single-node load test ✓ ([LOAD.md](../experiments/results/LOAD.md)); 3-node failover and rollover ✓ ([CLUSTER.md](../experiments/results/CLUSTER.md)). **Gate open: needs a target peak and a production-sized cluster** |
 | **3. Engine as a service** | Evaluation workers on the stream; scores into `scores-*`; calibration lifecycle (candidate → shadow → active); drift alerts; eval-aware retention | Drift detection and recalibration work end to end on replayed traffic | ✓ The holdout replayed through the full path reproduces the engine exactly ([PIPELINE.md](../experiments/results/PIPELINE.md)); drift alerts, shadow comparison and promotion tested |
 | **4. Humans and offline** | Annotation queues with automatic filling; distillation loop; datasets and experiments; pytest plugin and CI gates; `synth` | A distilled head replaces judge calls on at least one check without breaching its floor | ✓ Frustration's route dropped the judge (e5 → Jev) and improved; −44% LLM calls overall ([DISTILL.md](../experiments/results/DISTILL.md)) |
-| **5. Sentry bridge** | Propagation guide; `before_send` helper; webhook bridge; External Issue links; quality-regression events | Click-through both ways on a demo; self-hosted proof of concept | Built; tested against a fake Sentry API and with the real Sentry SDK. **Gate open: needs a Sentry installation** |
+| **5. Sentry bridge** | Propagation guide; `before_send` helper; webhook bridge; External Issue links; quality-regression events | Click-through both ways on a demo; self-hosted proof of concept | ✓ Against self-hosted Sentry 25.7: 13 of 13 checks, click-through both ways in a browser, issue linked about 11 s after the exception ([SENTRY_POC.md](../experiments/results/SENTRY_POC.md)) |
 | **6. UI and governance** | The 5 screens; two-tier tenancy; audit log; Helm chart | First external tenant | Built ✓ (UI with Playwright tests, dedicated and pooled tenants, scoped API keys, audit log, compose and Helm). **Gate open: first tenant** |
 
 ---
@@ -681,6 +684,7 @@ Everything in §4–§11 exists and is tested. Tests: `pytest` (44: offline, and
 | L24 | Imported Dashboards index patterns have no field list, so every visualization failed to render ("could not locate field") while the import reported success | Fill the field lists after import; check visualizations by rendering them |
 | L25 | On a 3-node cluster with one replica, killing a node mid-ingest lost no span (38,181 sent, 38,181 indexed); ISM rolled the write alias over and the cluster returned to green ([CLUSTER.md](../experiments/results/CLUSTER.md)) | Idempotent writes plus Kafka-held offsets make node loss a non-event for ingest |
 | L26 | On the synthetic holdout the phase-1 gate failed one check (fee_mismatch: 91.3% against 94.0%, SE 1.4). Calibration takes the cheapest route within one SE of the best on training data, and the gate rejects anything more than one SE below the best on held-out data, so a route chosen at the floor misses the gate about half the time. Cross-fitted thresholds alone moved it to 92.0%. Adding a floor at half an SE gave 92.7%, and every check passed, at $117 against $92 per 1M conversations ([GATE_PHASE1.md](../experiments/results/GATE_PHASE1.md)) | `crossfit_folds` and `floor_se` policy fields. Defaults favour cost; tenants who must clear the gate set `crossfit_folds: 5`, `floor_se: 0.5` |
+| L27 | A real Sentry broke the bridge in six ways the fake API could not: `issue.created` fires once per issue (later conversations come as `error.created`, regressions as `issue.unresolved`); one External Issue per issue; links by trace id; links arriving before evaluation were overwritten; errors raised in child spans lacked the conversation id; stored links had no URL ([SENTRY_POC.md](../experiments/results/SENTRY_POC.md)) | Test integrations against the real system early; the proof of concept is now a script (`experiments/sentry_poc.py`, `deploy/sentry-poc/`) |
 | L22 | One shared 4-core VM ingested 3,400 spans/s end to end and stored `obs` at about 320 MB per million spans (`zstd`, after merge); list views answered in 25–35 ms at p50, full-text search in about 240 ms; local-only evaluation ran at 16 conversations/s ([LOAD.md](../experiments/results/LOAD.md)) | At a billion spans a month that is about 320 GB of `obs` before replicas, before retention. Full-text search is the slow query (it resolves content hits to conversations in two steps): index the first user message and flags on `traces-*` for common searches. Local heads are the evaluation bottleneck on CPU: serve them with ONNX Runtime or TEI (§11) |
 
 ---

@@ -128,7 +128,8 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
     @app.get("/v1/conversations")
     def list_conversations(c: Ctx = Depends(need("traces:read")), q: str | None = None, flag: str | None = None,
                            agent: str | None = None, error: bool | None = None, lang: str | None = None,
-                           experiment: str | None = None, frm: str | None = Query(None, alias="from"),
+                           experiment: str | None = None, sentry_issue: str | None = None,
+                           frm: str | None = Query(None, alias="from"),
                            to: str | None = None, size: int = Query(50, le=500), search_after: str | None = None):
         filt: list[dict[str, Any]] = [tenant_filter(c.tenant)]
         if flag:
@@ -141,6 +142,8 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
             filt.append({"term": {"lang": lang}})
         if experiment:
             filt.append({"term": {"experiment_run_id": experiment}})
+        if sentry_issue:  # the Sentry issue's External Issue link opens this view
+            filt.append({"term": {"sentry_issue_ids": sentry_issue}})
         if frm or to:
             filt.append({"range": {"start_time": {k: v for k, v in (("gte", frm), ("lte", to)) if v}}})
         must = []
@@ -176,6 +179,12 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
     @app.get("/v1/conversations/{cid}")
     def get_conversation(cid: str, c: Ctx = Depends(need("traces:read"))):
         rollup = _rollup(c, cid)
+        if rollup is None:  # Sentry links by trace id: resolve a trace to the conversation (session) it belongs to
+            hits = os_.hits("traces", {"size": 5, "query": {"bool": {"filter": [tenant_filter(c.tenant),
+                                                                              {"term": {"trace_ids": cid}}]}}}, pool(c))
+            if hits:
+                rollup = max(hits, key=lambda h: h.get("updated_at", ""))
+                cid = rollup["conversation_id"]
         row = pg.one("SELECT kind, status, n_spans, last_error FROM trace_tracker WHERE tenant_id=%s AND conversation_id=%s",
                      c.tenant, cid)
         kind = row["kind"] if row else ("session" if rollup and rollup.get("session_id") else "trace")
@@ -190,6 +199,8 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
         span_view = [dict(s, content=(by_span.get(s["span_id"]) or {}).get("raw")) for s in spans]
         trace_ids = (rollup or {}).get("trace_ids") or sorted({s["trace_id"] for s in spans})
         links = pg.all("SELECT * FROM sentry_links WHERE tenant_id=%s AND trace_id = ANY(%s)", c.tenant, trace_ids)
+        if sentry_bridge is not None:  # stored links carry no URL: build the one the UI opens
+            links = [dict(lk, permalink=sentry_bridge.issue_url(lk["sentry_issue_id"])) for lk in links]
         if not links and sentry_bridge is not None and sentry_bridge.org and sentry_bridge.token:
             links = [dict(i, trace_id=t, source="lookup") for t in trace_ids[:5] for i in sentry_bridge.issues_for_trace(t)]
         return {"conversation": conv, "rollup": rollup, "spans": span_view, "scores": scores, "tracker": row,
