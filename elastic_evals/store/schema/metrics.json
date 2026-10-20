@@ -1,0 +1,30 @@
+{
+  "_comment": "Append-only time buckets for fixed dashboards; star-tree index pre-aggregates the dimensions below.",
+  "settings": {"index.composite_index": true, "index.append_only.enabled": true, "index.codec": "zstd"},
+  "mappings": {
+    "dynamic": "strict",
+    "composite": {
+      "checks": {
+        "type": "star_tree",
+        "config": {
+          "date_dimension": {"name": "ts", "calendar_intervals": ["hour", "day"]},
+          "ordered_dimensions": [{"name": "tenant_id"}, {"name": "agent_name"}, {"name": "check"}],
+          "metrics": [
+            {"name": "n", "stats": ["sum"]},
+            {"name": "flagged", "stats": ["sum"]},
+            {"name": "cost_usd", "stats": ["sum"]}
+          ]
+        }
+      }
+    },
+    "properties": {
+      "ts": {"type": "date"},
+      "tenant_id": {"type": "keyword"},
+      "agent_name": {"type": "keyword"},
+      "check": {"type": "keyword"},
+      "n": {"type": "long"},
+      "flagged": {"type": "long"},
+      "cost_usd": {"type": "double"}
+    }
+  }
+}

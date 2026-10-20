@@ -32,10 +32,10 @@ class CacheMiss(RuntimeError):
     """Raised in offline mode (EVAL_OFFLINE=1) when a request is not already cached."""
 
 
-def _api_key() -> str:
-    key = os.environ.get("OPENROUTER_API_KEY")
+def _api_key(env: str = "OPENROUTER_API_KEY") -> str:
+    key = os.environ.get(env)
     if not key:
-        raise RuntimeError("OPENROUTER_API_KEY is not set (load it from an env file outside git)")
+        raise RuntimeError(f"{env} is not set (load it from an env file outside git)")
     return key
 
 
@@ -70,7 +70,7 @@ class OpenRouter:
         if self._loop is not None:
             await self._client.aclose()
 
-    async def _post(self, url: str, body: dict, tag: str) -> dict:
+    async def _post(self, url: str, body: dict, tag: str, api_key_env: str | None = "OPENROUTER_API_KEY") -> dict:
         path = _cache_path(url, body)
         if path.exists():
             cached = json.loads(path.read_text())
@@ -85,9 +85,8 @@ class OpenRouter:
             for attempt in range(10):
                 t0 = time.perf_counter()
                 try:
-                    res = await self._client.post(
-                        url, json=body, headers={"Authorization": f"Bearer {_api_key()}"}
-                    )
+                    headers = {"Authorization": f"Bearer {_api_key(api_key_env)}"} if api_key_env else {}
+                    res = await self._client.post(url, json=body, headers=headers)
                 except httpx.TransportError:
                     await asyncio.sleep(2**attempt)
                     continue
@@ -114,9 +113,12 @@ class OpenRouter:
         data["_cached"] = False
         return data
 
-    async def chat(self, model: str, messages: list, tag: str, **params) -> dict:
+    async def chat(self, model: str, messages: list, tag: str, url: str | None = None,
+                   api_key_env: str | None = "OPENROUTER_API_KEY", **params) -> dict:
+        """OpenRouter by default; `url` points at any OpenAI-compatible endpoint (e.g. a judge served
+        inside the deployment), with its key read from `api_key_env` (None: no auth header)."""
         body = {"model": model, "messages": messages, **params}
-        return await self._post(CHAT_URL, body, tag)
+        return await self._post(url or CHAT_URL, body, tag, api_key_env)
 
     async def decide(self, model: str, state, questions: dict, tag: str) -> dict:
         body = {"model": model, "state": state, "questions": questions}

@@ -1,0 +1,43 @@
+{
+  "_comment": "One document per score (DESIGN.md 6.6), with trace context copied on. Corrections are new scores that supersede old ones.",
+  "settings": {"index.codec": "zstd"},
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "id": {"type": "keyword"},
+      "timestamp": {"type": "date"},
+      "tenant_id": {"type": "keyword"},
+      "conversation_id": {"type": "keyword"},
+      "trace_id": {"type": "keyword"},
+      "observation_id": {"type": "keyword"},
+      "session_id": {"type": "keyword"},
+      "check": {"type": "keyword"},
+      "question": {"type": "keyword"},
+      "value": {"type": "float"},
+      "p": {"type": "float"},
+      "probs": {"type": "flat_object"},
+      "label": {"type": "keyword"},
+      "explanation": {"type": "text"},
+      "decision": {"type": "boolean"},
+      "sample_reason": {"type": "keyword"},
+      "evaluator": {"properties": {
+        "id": {"type": "keyword"}, "kind": {"type": "keyword"}, "tier": {"type": "byte"},
+        "version": {"type": "keyword"}, "criteria_version": {"type": "keyword"}
+      }},
+      "calibration_id": {"type": "keyword"},
+      "route": {"type": "keyword"},
+      "strictness": {"type": "float"},
+      "critical": {"type": "boolean"},
+      "cost_usd": {"type": "double"},
+      "latency_ms": {"type": "float"},
+      "lang": {"type": "keyword"},
+      "experiment": {"properties": {"run_id": {"type": "keyword"}, "item_id": {"type": "keyword"}}},
+      "trace_ctx": {"properties": {
+        "agent": {"type": "keyword"}, "flow": {"type": "keyword"}, "model": {"type": "keyword"},
+        "tags": {"type": "keyword"}, "environment": {"type": "keyword"}, "release": {"type": "keyword"}
+      }},
+      "annotator": {"type": "keyword"},
+      "supersedes": {"type": "keyword"}
+    }
+  }
+}

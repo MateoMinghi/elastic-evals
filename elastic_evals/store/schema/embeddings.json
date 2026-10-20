@@ -1,0 +1,18 @@
+{
+  "_comment": "Vectors for similar-conversation search and local heads. Default codec: k-NN rejects zstd.",
+  "settings": {"index.knn": true},
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "tenant_id": {"type": "keyword"},
+      "conversation_id": {"type": "keyword"},
+      "unit": {"type": "keyword"},
+      "turn": {"type": "integer"},
+      "model": {"type": "keyword"},
+      "lang": {"type": "keyword"},
+      "flags": {"type": "keyword"},
+      "timestamp": {"type": "date"},
+      "vector": {"type": "knn_vector", "dimension": 384, "space_type": "cosinesimil", "mode": "on_disk", "compression_level": "16x"}
+    }
+  }
+}

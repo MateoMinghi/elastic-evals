@@ -29,11 +29,21 @@ def read_jsonl(path):
 
 
 def print_report(cal):
-    rows = [[q, " → ".join(cal["routes"][q]), f"{100 * r['chosen']['accuracy']:.1f}", f"{100 * r['best_accuracy']:.1f}",
-             f"{r['chosen']['usd_per_conv'] * 1e6:.1f}", f"{r['chosen']['ms_per_conv']:.0f}",
-             "yes" if r["meets_target"] else "NO"] for q, r in cal["report"].items()]
-    print(tabulate(rows, ["question", "route", "acc %", "best acc %", "$ / 1M conv", "ms", "meets target"],
-                   tablefmt="github"))
+    sc = cal["suite_choice"]
+    print(f"calibration {cal.get('id', '?')} ({cal.get('status', '?')}) on {cal['n_labelled']} labelled conversations; "
+          f"hosted set: {', '.join(sc['hosted']) or 'none'}; ${1e6 * sc['usd_per_conv']:.1f} / 1M conv, "
+          f"{sc['ms_per_conv']:.0f} ms / conv" + ("" if cal.get("budget_met", True) else "  ** OVER BUDGET **"))
+    langs = sorted({lg for r in cal["report"].values() for lg in r["chosen"].get("by_lang", {})})
+    rows = []
+    for q, r in cal["report"].items():
+        by_lang = r["chosen"].get("by_lang", {})
+        rows.append([q, " → ".join(cal["routes"][q]), f"{100 * r['chosen']['accuracy']:.1f}",
+                     f"{100 * r['floor']:.1f}", f"{100 * r['best_accuracy']:.1f}",
+                     *[f"{100 * by_lang[lg]['accuracy']:.1f}" if lg in by_lang else "" for lg in langs],
+                     f"{r['chosen']['usd_per_conv'] * 1e6:.1f}", f"{r['chosen']['ms_per_conv']:.0f}",
+                     "yes" if r.get("meets_floor", True) else "NO", "yes" if r["meets_target"] else "NO"])
+    print(tabulate(rows, ["question", "route", "acc %", "floor %", "best %", *[f"{lg} %" for lg in langs],
+                          "$ / 1M conv", "ms", "meets floor", "meets target"], tablefmt="github"))
 
 
 def main(argv=None):
@@ -74,7 +84,6 @@ def main(argv=None):
 
     cal = json.loads((Path(args.calib) / "calibration.json").read_text())
     suite.policy.allow_hosted = cal["policy"]["allow_hosted"]
-    cal["thresholds"] = {q: {e: tuple(t) if t else None for e, t in th.items()} for q, th in cal["thresholds"].items()}
     evaluators = build(suite, OpenRouter() if suite.policy.allow_hosted else None)
     heads = pickle.loads((Path(args.calib) / "heads.pkl").read_bytes())
     for e in evaluators:

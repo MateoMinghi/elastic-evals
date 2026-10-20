@@ -1,0 +1,17 @@
+{
+  "_comment": "Lifecycle per index kind: roll over by primary shard size, warm after the hot period, delete at the end. {placeholders} are filled by `elastic-evals setup`.",
+  "policy": {
+    "description": "elastic-evals {kind}",
+    "default_state": "hot",
+    "states": [
+      {"name": "hot",
+       "actions": [{"rollover": {"min_primary_shard_size": "{rollover_size}", "min_index_age": "{rollover_age}"}}],
+       "transitions": [{"state_name": "warm", "conditions": {"min_index_age": "{hot_days}d"}}]},
+      {"name": "warm",
+       "actions": [{"force_merge": {"max_num_segments": 1}}, {"read_only": {}}],
+       "transitions": [{"state_name": "delete", "conditions": {"min_index_age": "{delete_days}d"}}]},
+      {"name": "delete", "actions": [{"delete": {}}], "transitions": []}
+    ],
+    "ism_template": [{"index_patterns": ["{pattern}"], "priority": 100}]
+  }
+}

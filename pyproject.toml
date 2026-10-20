@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "elastic-evals"
+version = "0.2.0"
+description = "Observability and calibrated evaluation for production AI agents, on OpenSearch"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = [
+  "httpx>=0.27",
+  "numpy>=1.26",
+  "pyyaml>=6",
+  "tabulate>=0.9",
+  "scikit-learn>=1.4",
+  "snowballstemmer>=2.2",
+  "unidecode>=1.3",
+]
+
+[project.optional-dependencies]
+local = ["sentence-transformers>=3"]
+service = [
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "psycopg[binary]>=3.1",
+  "aiokafka>=0.10",
+]
+otel = ["opentelemetry-sdk>=1.25", "opentelemetry-exporter-otlp-proto-http>=1.25"]
+sentry = ["sentry-sdk>=2"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+all = ["elastic-evals[local,service,otel,sentry,dev]"]
+
+[project.scripts]
+elastic-evals = "elastic_evals.__main__:main"
+
+[project.entry-points.pytest11]
+elastic_evals = "elastic_evals.pytest_plugin"
+
+[tool.setuptools.packages.find]
+include = ["elastic_evals*"]
+
+[tool.setuptools.package-data]
+elastic_evals = ["store/schema/*.json", "store/schema/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+  "infra: needs OpenSearch, Postgres and Kafka running (see deploy/)",
+]
