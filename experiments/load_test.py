@@ -103,7 +103,12 @@ def main():
     procs = [subprocess.Popen([eecol, "--config", str(REPO / f"deploy/collector/{n}.yaml")], env=env,
                               stdout=open(logs / f"load-{n}.log", "w"), stderr=subprocess.STDOUT)
              for n in ("gateway", "ingest")]
+    import atexit
+    atexit.register(lambda: [p.terminate() for p in procs])  # never leave collectors holding the ports
     time.sleep(4)
+    for p in procs:
+        if p.poll() is not None:
+            sys.exit(f"collector exited at start (port in use?): see {logs}")
     res = {"conversations": a.conversations, "senders": a.senders, "workers": a.workers, "cpus": os.cpu_count()}
 
     # 1. ingest

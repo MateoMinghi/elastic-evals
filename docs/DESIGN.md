@@ -670,6 +670,7 @@ Everything in §4–§11 exists and is tested, except where marked. Tests: `pyte
 | L19 | The production path reproduces the offline engine exactly (93.5% on the holdout, check by check) | The engine can be calibrated and evaluated offline with confidence |
 | L20 | Distillation pays: 93.9% (against 93.5%), $53 against $83 per 1M conversations, 20% against 36% sent to an LLM | Distillation is worth making routine (§6.8) |
 | L21 | With synthetic, problem-rich traffic, eval-aware retention kept 93% of conversations | Real traffic is mostly clean, so expect a much lower keep rate; measure it in phase 1 |
+| L22 | One shared 4-core VM ingested 3,400 spans/s end to end and stored `obs` at about 320 MB per million spans (`zstd`, after merge); list views answered in 25–35 ms at p50, full-text search in about 240 ms; local-only evaluation ran at 16 conversations/s ([LOAD.md](../experiments/results/LOAD.md)) | At a billion spans a month that is about 320 GB of `obs` before replicas, before retention. Full-text search is the slow query (it resolves content hits to conversations in two steps): index the first user message and flags on `traces-*` for common searches. Local heads are the evaluation bottleneck on CPU: serve them with ONNX Runtime or TEI (§11) |
 
 ---
 

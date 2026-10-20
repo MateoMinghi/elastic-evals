@@ -89,7 +89,12 @@ def main():
     logs.mkdir(exist_ok=True)
     procs = [subprocess.Popen([eecol, "--config", str(REPO / f"deploy/collector/{n}.yaml")], env=env,
                               stdout=open(logs / f"{n}.log", "w"), stderr=subprocess.STDOUT) for n in ("gateway", "ingest")]
+    import atexit
+    atexit.register(lambda: [p.terminate() for p in procs])  # never leave collectors holding the ports
     time.sleep(4)
+    for p in procs:
+        if p.poll() is not None:
+            sys.exit(f"collector exited at start (port in use?): see {logs}")
 
     c_set = load("synthetic_c.jsonl")
     labels = {c["id"]: c["labels"] for c in c_set}

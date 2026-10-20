@@ -1,0 +1,105 @@
+{
+ "conversations": 5000,
+ "senders": 3,
+ "workers": 2,
+ "cpus": 4,
+ "spans": 63643,
+ "send_s": 4.23145318031311,
+ "ingest_s": 18.77920174598694,
+ "indexed": 63643,
+ "ingest_spans_per_s": 3389.015191425819,
+ "ingest_curve": [
+  [
+   4.2,
+   0
+  ],
+  [
+   6.3,
+   2008
+  ],
+  [
+   8.3,
+   13023
+  ],
+  [
+   10.4,
+   24535
+  ],
+  [
+   12.6,
+   36117
+  ],
+  [
+   14.7,
+   47447
+  ],
+  [
+   16.8,
+   58185
+  ],
+  [
+   18.8,
+   63643
+  ]
+ ],
+ "evaluate_s": 304.4318928718567,
+ "evaluated": 5000,
+ "conversations_per_s": 16.42403479094298,
+ "storage": {
+  "traces": {
+   "docs": 5000,
+   "bytes": 3301140
+  },
+  "scores": {
+   "docs": 25000,
+   "bytes": 9676121
+  },
+  "obs": {
+   "docs": 63643,
+   "bytes": 20461690
+  },
+  "stage": {
+   "docs": 63643,
+   "bytes": 20621278
+  },
+  "metrics": {
+   "docs": 395,
+   "bytes": 79090
+  },
+  "payload": {
+   "docs": 63172,
+   "bytes": 20581353
+  },
+  "embeddings": {
+   "docs": 0,
+   "bytes": 208
+  }
+ },
+ "gb_per_million_spans": {
+  "obs": 0.3215073142372295,
+  "stage": 0.32401486416416575,
+  "scores_per_million_conversations": 1.9352242
+ },
+ "query_latency": {
+  "list (50, sorted, facets)": {
+   "p50_ms": 25.75759800038213,
+   "p95_ms": 31.36891500071215
+  },
+  "list filtered by flag": {
+   "p50_ms": 23.769000999891432,
+   "p95_ms": 31.42503300023236
+  },
+  "full-text search": {
+   "p50_ms": 236.5270700001929,
+   "p95_ms": 271.7208149997532
+  },
+  "score summary (7 days)": {
+   "p50_ms": 11.010439000074257,
+   "p95_ms": 16.61635400068917
+  },
+  "conversation detail": {
+   "p50_ms": 33.73588749991541,
+   "p95_ms": 51.76908999965235
+  }
+ }
+}
