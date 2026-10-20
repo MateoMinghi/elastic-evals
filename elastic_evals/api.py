@@ -188,8 +188,10 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
                                      "sort": [{"timestamp": "desc"}]}, pool(c))
         by_span = {d["span_id"]: d for d in content}
         span_view = [dict(s, content=(by_span.get(s["span_id"]) or {}).get("raw")) for s in spans]
-        links = pg.all("SELECT * FROM sentry_links WHERE tenant_id=%s AND trace_id = ANY(%s)", c.tenant,
-                       (rollup or {}).get("trace_ids") or [s["trace_id"] for s in spans])
+        trace_ids = (rollup or {}).get("trace_ids") or sorted({s["trace_id"] for s in spans})
+        links = pg.all("SELECT * FROM sentry_links WHERE tenant_id=%s AND trace_id = ANY(%s)", c.tenant, trace_ids)
+        if not links and sentry_bridge is not None and sentry_bridge.org and sentry_bridge.token:
+            links = [dict(i, trace_id=t, source="lookup") for t in trace_ids[:5] for i in sentry_bridge.issues_for_trace(t)]
         return {"conversation": conv, "rollup": rollup, "spans": span_view, "scores": scores, "tracker": row,
                 "sentry": links}
 

@@ -40,7 +40,10 @@ class Session:
         self.run_id = f"pytest_{uuid.uuid4().hex[:8]}"
 
     def opt(self, name):
-        return self.config.getoption(f"--ee-{name}") or self.config.getini(f"ee_{name}")
+        value = self.config.getoption(f"--ee-{name}")
+        if value is None and name in ("suite", "calibration"):
+            value = self.config.getini(f"ee_{name}")
+        return value
 
     def engine(self):
         if self.bundle is None:

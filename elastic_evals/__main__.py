@@ -1,27 +1,38 @@
-"""CLI.
+"""elastic-evals command line.
 
-  python -m elastic_evals calibrate --suite suite.yaml --data labelled.jsonl --out calib/
-  python -m elastic_evals run       --suite suite.yaml --calib calib/ --data convs.jsonl --out scores.jsonl
-  python -m elastic_evals report    --calib calib/
+Engine (no services needed):
+  calibrate   --suite S --data labelled.jsonl --out calib/ [--local-only] [--pool unlabelled.jsonl --teacher llm_x]
+  report      --calib calib/
+  run         --suite S --calib calib/ --data convs.jsonl --out scores.jsonl
+  experiment  --suite S --calib calib/ --items items.jsonl --agent pkg.mod:fn [--baseline run.json] [--report run.json]
+  synth       --spec spec.yaml --n 50 --out synth.jsonl
 
-Labelled conversations carry "labels": {question: 0|1}. Add --local-only to forbid hosted
-evaluators (no conversation text leaves the machine). OpenRouter calls need OPENROUTER_API_KEY
+Services (OpenSearch, Postgres, Kafka; see deploy/):
+  setup       [--pools shared] [--tenant acme --dedicated] [--admin-key]   indices, templates, ISM, schema
+  serve       [--port 8000]                                                 API + UI
+  tracker     [--brokers localhost:9092] [--session-idle 300]               trace-complete signal
+  worker      [--embed]                                                     evaluation workers
+  replay      --data convs.jsonl --tenant acme [--endpoint http://localhost:4318]
+  suite       --tenant T --id ID --file suite.yaml [--agent name]           register a suite version
+  register    --tenant T --suite ID --calib calib/                          store a calibration (candidate)
+  shadow | promote | reject  CALIBRATION_ID
+  drift       --tenant T --suite ID
+  annotate    --tenant T --queue QUEUE_ID [--annotator you]                 keyboard labelling in the terminal
+
+Labelled conversations carry "labels": {question: 0|1|class}. OpenRouter calls need OPENROUTER_API_KEY
 (or EVAL_ENV_FILE pointing at an env file outside the repository).
 """
 
 import argparse
+import asyncio
+import importlib
 import json
-import pickle
+import logging
+import os
 import sys
 from pathlib import Path
 
 from tabulate import tabulate
-
-from .calibrate import calibrate
-from .engine import Engine
-from .evaluators import LocalHeadEvaluator, build
-from .providers import OpenRouter, load_env
-from .suite import Suite
 
 
 def read_jsonl(path):
@@ -46,51 +57,55 @@ def print_report(cal):
                           "$ / 1M conv", "ms", "meets floor", "meets target"], tablefmt="github"))
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(prog="elastic_evals")
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    c = sub.add_parser("calibrate")
-    c.add_argument("--suite", required=True)
-    c.add_argument("--data", required=True)
-    c.add_argument("--out", required=True)
-    c.add_argument("--local-only", action="store_true")
-    r = sub.add_parser("run")
-    r.add_argument("--suite", required=True)
-    r.add_argument("--calib", required=True)
-    r.add_argument("--data", required=True)
-    r.add_argument("--out", required=True)
-    p = sub.add_parser("report")
-    p.add_argument("--calib", required=True)
-    args = ap.parse_args(argv)
-    load_env()
+def _client(allow_hosted):
+    if not allow_hosted:
+        return None
+    from .providers import OpenRouter
+    return OpenRouter()
 
-    if args.cmd == "report":
-        print_report(json.loads((Path(args.calib) / "calibration.json").read_text()))
-        return
 
-    suite = Suite.load(args.suite)
-    if args.cmd == "calibrate":
-        suite.policy.allow_hosted = not args.local_only
-        convs = read_jsonl(args.data)
-        labels = {(cv["id"], q): v for cv in convs for q, v in cv["labels"].items()}
-        cal, evaluators = calibrate(suite, convs, labels, OpenRouter() if suite.policy.allow_hosted else None)
-        out = Path(args.out)
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "calibration.json").write_text(json.dumps(cal, indent=1, default=str))
-        heads = {e.id: e.heads for e in evaluators if isinstance(e, LocalHeadEvaluator)}
-        (out / "heads.pkl").write_bytes(pickle.dumps(heads))
-        print_report(cal)
-        return
+def _stores():
+    from .registry import Registry
+    from .store.opensearch import OpenSearch
+    from .store.postgres import Postgres
+    pg = Postgres()
+    os_ = OpenSearch(prefix=os.environ.get("EE_INDEX_PREFIX", "ee"))
+    return pg, os_, Registry(pg)
 
-    cal = json.loads((Path(args.calib) / "calibration.json").read_text())
-    suite.policy.allow_hosted = cal["policy"]["allow_hosted"]
-    evaluators = build(suite, OpenRouter() if suite.policy.allow_hosted else None)
-    heads = pickle.loads((Path(args.calib) / "heads.pkl").read_bytes())
-    for e in evaluators:
-        if isinstance(e, LocalHeadEvaluator):
-            e.heads = heads.get(e.id, {})
-    results = Engine(suite, cal, evaluators).run(read_jsonl(args.data))
-    with Path(args.out).open("w") as f:
+
+def cmd_calibrate(a):
+    from .bundle import save
+    from .calibrate import calibrate
+    from .suite import Suite
+    suite = Suite.load(a.suite)
+    suite.policy.allow_hosted = suite.policy.allow_hosted and not a.local_only
+    convs = read_jsonl(a.data)
+    labels = {(cv["id"], q): v for cv in convs for q, v in cv["labels"].items()}
+    client = _client(suite.policy.allow_hosted or bool(a.teacher))
+    if a.pool:
+        from .distill import teacher_labels
+        from .calibrate import calibrate_async
+        pool = read_jsonl(a.pool)
+
+        async def go():
+            teacher_suite = Suite.load(a.suite)
+            judge, usd = await teacher_labels(teacher_suite, pool, a.teacher, client)
+            print(f"teacher {a.teacher} labelled {len(pool)} conversations (${usd:.4f})")
+            return await calibrate_async(suite, convs, labels, client if suite.policy.allow_hosted else None,
+                                         extra=(pool, judge))
+        cal, evaluators = asyncio.run(go())
+    else:
+        cal, evaluators = calibrate(suite, convs, labels, client)
+    save(a.out, cal, evaluators)
+    print_report(cal)
+
+
+def cmd_run(a):
+    from .bundle import load
+    from .engine import Engine
+    suite, cal, evaluators = load(a.suite, a.calib)
+    results = Engine(suite, cal, evaluators).run(read_jsonl(a.data))
+    with Path(a.out).open("w") as f:
         for res in results:
             for s in res["scores"]:
                 f.write(json.dumps(s, ensure_ascii=False) + "\n")
@@ -99,6 +114,236 @@ def main(argv=None):
           f"(+${sum(x['audit_usd'] for x in results):.6f} audit), "
           f"{sum(x['ms'] for x in results) / max(1, n):.0f} ms/conv, "
           f"{sum(any(e.startswith('llm') for e in x['evaluators_called']) for x in results)} sent to an LLM")
+
+
+def cmd_experiment(a):
+    from . import experiments as exps
+    from .bundle import load
+    suite, cal, evaluators = load(a.suite, a.calib)
+    module, fn = a.agent.split(":")
+    agent = getattr(importlib.import_module(module), fn)
+    items = read_jsonl(a.items)
+    baseline = json.loads(Path(a.baseline).read_text())["summary"] if a.baseline else None
+    result = exps.run(agent, items, suite, cal, evaluators, baseline=baseline, tolerance=a.tolerance)
+    s = result["summary"]
+    for check, rate in s["rates"].items():
+        if rate is not None:
+            print(f"{check:24s} flagged {100 * rate:5.1f}%")
+    for g in s["gates"]:
+        print(f"gate {g['check']:20s} {g['kind']:10s} {'PASS' if g['pass'] else 'FAIL'}")
+    if a.report:
+        Path(a.report).write_text(json.dumps(result, indent=1, default=str, ensure_ascii=False))
+    return 0 if s["passed"] else 1
+
+
+def cmd_synth(a):
+    from .synth import generate
+    from .providers import OpenRouter
+    convs, stats = generate(a.spec, a.n, OpenRouter(), a.seed)
+    with Path(a.out).open("w") as f:
+        for c in convs:
+            f.write(json.dumps(c, ensure_ascii=False) + "\n")
+    print(json.dumps(stats))
+
+
+def cmd_setup(a):
+    pg, os_, reg = _stores()
+    pg.migrate()
+    pools = set(a.pools)
+    if a.tenant:
+        reg.ensure_tenant(a.tenant, tier="dedicated" if a.dedicated else "pooled", allow_hosted=not a.local_only)
+        pools.add(reg.pool(a.tenant))
+    os_.setup(pools=tuple(sorted(pools)), shards=a.shards, replicas=a.replicas)
+    print(f"OpenSearch pools {sorted(pools)} and Postgres schema ready")
+    if a.admin_key and a.tenant:
+        import secrets
+        from .api import hash_secret
+        key_id, secret = f"ek_{secrets.token_hex(6)}", secrets.token_urlsafe(24)
+        pg.exec("INSERT INTO api_keys (id, tenant_id, secret_hash, role_id) VALUES (%s, %s, %s, 'admin')",
+                key_id, a.tenant, hash_secret(secret))
+        print(f"admin API key for {a.tenant}: {key_id}.{secret}")
+
+
+def cmd_serve(a):
+    import uvicorn
+    uvicorn.run("elastic_evals.api:app", host=a.host, port=a.port, log_level="info")
+
+
+def cmd_tracker(a):
+    from .tracker import Timing, run
+    pg, _, _ = _stores()
+    asyncio.run(run(pg, a.brokers, Timing(a.trace_idle, a.session_idle, a.max_wait), a.topic))
+
+
+def cmd_worker(a):
+    from .worker import Worker
+    pg, os_, reg = _stores()
+    asyncio.run(Worker(pg, os_, reg, batch=a.batch, embed=a.embed).run())
+
+
+def cmd_replay(a):
+    from .replay import replay
+    n = replay(read_jsonl(a.data), a.endpoint, a.tenant, agent=a.agent, rate=a.rate)
+    print(f"sent {n} spans")
+
+
+def cmd_suite(a):
+    _, _, reg = _stores()
+    print(reg.put_suite(a.tenant, a.id, Path(a.file).read_text(), a.agent))
+
+
+def cmd_register(a):
+    from .bundle import load
+    _, _, reg = _stores()
+    calib = json.loads((Path(a.calib) / "calibration.json").read_text())
+    version = calib["suite_version"]
+    suite_row = reg.pg.one("SELECT yaml FROM suite_versions WHERE tenant_id=%s AND suite_id=%s AND version=%s",
+                           a.tenant, a.suite, version)
+    if suite_row is None:
+        sys.exit(f"suite {a.suite}@{version} is not registered for {a.tenant}: run `suite` first with the same YAML")
+    tmp = Path(a.calib) / ".suite.yaml"
+    tmp.write_text(suite_row["yaml"])
+    _, cal, evaluators = load(tmp, a.calib)
+    print(reg.save_calibration(a.tenant, a.suite, cal, evaluators))
+
+
+def cmd_lifecycle(a):
+    _, _, reg = _stores()
+    {"shadow": reg.start_shadow, "promote": reg.promote, "reject": reg.reject}[a.cmd](a.calibration)
+    print(reg.calibration(a.calibration)["status"])
+
+
+def cmd_drift(a):
+    from .drift import check
+    pg, os_, reg = _stores()
+    print(json.dumps(check(pg, os_, reg, a.tenant, a.suite, a.days, a.min_n, a.threshold), indent=1, default=str))
+
+
+def cmd_annotate(a):
+    from . import annotation
+    from .conversation import build
+    from .views import render
+    from .worker import fetch_conversation
+    pg, os_, reg = _stores()
+    q = annotation.queue(pg, a.queue)
+    print(f"queue {q['name']}: checks {', '.join(q['checks'])} — answer 1 (yes) / 0 (no) / s (skip) / q (quit)")
+    while True:
+        item = annotation.next_item(pg, a.queue, a.annotator)
+        if item is None:
+            print("queue empty")
+            return
+        cid = item["conversation_id"]
+        row = pg.one("SELECT kind FROM trace_tracker WHERE tenant_id=%s AND conversation_id=%s", q["tenant_id"], cid)
+        spans, content = fetch_conversation(os_, q["tenant_id"], cid, row["kind"] if row else "session", reg.pool(q["tenant_id"]))
+        conv = build(cid, spans, content, q["tenant_id"])
+        print("\n" + "=" * 80 + f"\n{cid}  ({item['reason']})  record: {json.dumps(conv['record'], ensure_ascii=False)}\n")
+        print(render(conv["turns"]))
+        labels = {}
+        for check in q["checks"]:
+            ans = input(f"{check}? ").strip().lower()
+            if ans == "q":
+                return
+            if ans == "s":
+                annotation.skip(pg, a.queue, cid)
+                break
+            labels[check] = int(ans) if ans in ("0", "1") else ans
+        else:
+            annotation.submit(pg, os_, reg, a.queue, cid, labels, a.annotator, conv["lang"])
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="elastic_evals", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    c = sub.add_parser("calibrate")
+    c.add_argument("--suite", required=True)
+    c.add_argument("--data", required=True)
+    c.add_argument("--out", required=True)
+    c.add_argument("--local-only", action="store_true")
+    c.add_argument("--pool", help="unlabelled conversations for distillation")
+    c.add_argument("--teacher", help="evaluator id of the LLM judge that labels --pool")
+    r = sub.add_parser("run")
+    r.add_argument("--suite", required=True)
+    r.add_argument("--calib", required=True)
+    r.add_argument("--data", required=True)
+    r.add_argument("--out", required=True)
+    p = sub.add_parser("report")
+    p.add_argument("--calib", required=True)
+    e = sub.add_parser("experiment")
+    e.add_argument("--suite", required=True)
+    e.add_argument("--calib", required=True)
+    e.add_argument("--items", required=True)
+    e.add_argument("--agent", required=True, help="module:function taking an item input, returning a conversation")
+    e.add_argument("--baseline")
+    e.add_argument("--report")
+    e.add_argument("--tolerance", type=float, default=0.02)
+    s = sub.add_parser("synth")
+    s.add_argument("--spec", required=True)
+    s.add_argument("--n", type=int, default=50)
+    s.add_argument("--out", required=True)
+    s.add_argument("--seed", type=int, default=0)
+
+    st = sub.add_parser("setup")
+    st.add_argument("--pools", nargs="*", default=["shared"])
+    st.add_argument("--tenant")
+    st.add_argument("--dedicated", action="store_true")
+    st.add_argument("--local-only", action="store_true")
+    st.add_argument("--shards", type=int, default=1)
+    st.add_argument("--replicas", type=int, default=0)
+    st.add_argument("--admin-key", action="store_true")
+    sv = sub.add_parser("serve")
+    sv.add_argument("--host", default="0.0.0.0")
+    sv.add_argument("--port", type=int, default=8000)
+    tr = sub.add_parser("tracker")
+    tr.add_argument("--brokers", default=os.environ.get("EE_KAFKA_BROKERS", "localhost:9092"))
+    tr.add_argument("--topic", default=os.environ.get("EE_KAFKA_TOPIC", "ee-spans"))
+    tr.add_argument("--trace-idle", type=float, default=30)
+    tr.add_argument("--session-idle", type=float, default=300)
+    tr.add_argument("--max-wait", type=float, default=3600)
+    w = sub.add_parser("worker")
+    w.add_argument("--batch", type=int, default=32)
+    w.add_argument("--embed", action="store_true")
+    rp = sub.add_parser("replay")
+    rp.add_argument("--data", required=True)
+    rp.add_argument("--tenant", required=True)
+    rp.add_argument("--endpoint", default="http://localhost:4318")
+    rp.add_argument("--agent", default="bank-assistant")
+    rp.add_argument("--rate", type=float, help="conversations per second")
+    su = sub.add_parser("suite")
+    su.add_argument("--tenant", required=True)
+    su.add_argument("--id", required=True)
+    su.add_argument("--file", required=True)
+    su.add_argument("--agent")
+    rg = sub.add_parser("register")
+    rg.add_argument("--tenant", required=True)
+    rg.add_argument("--suite", required=True)
+    rg.add_argument("--calib", required=True)
+    for name in ("shadow", "promote", "reject"):
+        lc = sub.add_parser(name)
+        lc.add_argument("calibration")
+    d = sub.add_parser("drift")
+    d.add_argument("--tenant", required=True)
+    d.add_argument("--suite", required=True)
+    d.add_argument("--days", type=float, default=7)
+    d.add_argument("--min-n", type=int, default=50)
+    d.add_argument("--threshold", type=float, default=0.05)
+    an = sub.add_parser("annotate")
+    an.add_argument("--tenant", required=True)
+    an.add_argument("--queue", required=True)
+    an.add_argument("--annotator", default=os.environ.get("USER", "annotator"))
+
+    args = ap.parse_args(argv)
+    from .providers import load_env
+    load_env()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    if args.cmd == "report":
+        print_report(json.loads((Path(args.calib) / "calibration.json").read_text()))
+        return 0
+    handler = {"calibrate": cmd_calibrate, "run": cmd_run, "experiment": cmd_experiment, "synth": cmd_synth,
+               "setup": cmd_setup, "serve": cmd_serve, "tracker": cmd_tracker, "worker": cmd_worker,
+               "replay": cmd_replay, "suite": cmd_suite, "register": cmd_register, "shadow": cmd_lifecycle,
+               "promote": cmd_lifecycle, "reject": cmd_lifecycle, "drift": cmd_drift, "annotate": cmd_annotate}[args.cmd]
+    return handler(args) or 0
 
 
 if __name__ == "__main__":

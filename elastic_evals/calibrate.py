@@ -89,8 +89,9 @@ def floor_of(best, n, tolerance, critical):
     return best - (se if critical else max(tolerance, se))
 
 
-async def collect(evaluators, convs, questions, labels=None):
-    """Run every evaluator on every conversation. Returns preds[e][(cid,q)], cost[e][cid], latency[e][cid]."""
+async def collect(evaluators, convs, questions, labels=None, extra=None):
+    """Run every evaluator on every conversation. Returns preds[e][(cid,q)], cost[e][cid], latency[e][cid].
+    extra = (conversations, labels): additional training data for local heads (distillation)."""
     preds, cost, lat = defaultdict(dict), defaultdict(dict), defaultdict(dict)
     for ev in evaluators:
         if not ev.hosted and not isinstance(ev, LocalHeadEvaluator):
@@ -100,7 +101,7 @@ async def collect(evaluators, convs, questions, labels=None):
                 cost[ev.id][c["id"]], lat[ev.id][c["id"]] = cst, lt
         elif isinstance(ev, LocalHeadEvaluator):
             if labels is not None:
-                preds[ev.id].update(ev.fit(convs, labels, questions))   # out-of-fold
+                preds[ev.id].update(ev.fit(convs, labels, questions, extra))   # out-of-fold
                 _, per_item = ev.evaluate_batch(convs, questions)        # timing only
             else:
                 out, per_item = ev.evaluate_batch(convs, questions)
@@ -191,11 +192,11 @@ def _overrun(c, policy):
     return over
 
 
-async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None):
+async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None, extra=None):
     evaluators = build(suite, client)
     questions = suite.questions
     policy = suite.policy
-    preds, cost, lat = await collect(evaluators, convs, questions, labels)
+    preds, cost, lat = await collect(evaluators, convs, questions, labels, extra)
 
     # thresholds per strictness level: a chain may require its cheap layers to be more accurate
     # than the policy target when the question's floor demands it
@@ -312,6 +313,7 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
         "criteria_versions": {q.name: q.criteria_version for q in questions},
         "policy": vars(policy),
         "n_labelled": len(convs),
+        "n_distilled": len(extra[0]) if extra else 0,
         "languages": sorted({c.get("lang", "und") for c in convs}),
         "evaluator_versions": {e.id: e.version for e in evaluators},
         "routes": routes,
@@ -325,6 +327,6 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
     }, evaluators
 
 
-def calibrate(suite: Suite, convs, labels, client: OpenRouter | None = None):
+def calibrate(suite: Suite, convs, labels, client: OpenRouter | None = None, extra=None):
     """Returns (calibration dict, evaluators with trained local heads)."""
-    return asyncio.run(calibrate_async(suite, convs, labels, client))
+    return asyncio.run(calibrate_async(suite, convs, labels, client, extra))

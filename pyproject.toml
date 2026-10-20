@@ -47,6 +47,7 @@ elastic_evals = ["store/schema/*.json", "store/schema/*.sql"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
   "infra: needs OpenSearch, Postgres and Kafka running (see deploy/)",
 ]

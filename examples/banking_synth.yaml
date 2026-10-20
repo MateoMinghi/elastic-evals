@@ -1,0 +1,53 @@
+# Synthetic test-set spec for banking_suite.yaml: `python -m elastic_evals synth --spec ... --n 50 --out s.jsonl`
+# Records are built in code (ground truth); each check is planted (present) or turned into a hard negative.
+name: banking
+prefix: synth
+generator: qwen/qwen3.8-flash     # a family different from the suite's judges
+reasoning: false
+languages: [es, en]
+turns: [6, 12]
+brief: >
+  You write realistic chat transcripts between a user and the AI assistant of PayMe, a banking app.
+  Users write casually, with typos and emoji sometimes. Tool calls show what the assistant did in the
+  backend. Follow the constraints exactly; the transcript is used to test automated evaluators.
+tools: [create_transfer, get_balance, create_booking, get_fee]
+records:
+  - weight: 2
+    fields:
+      operation: transfer
+      recipient: [Juan Gómez, María Pérez, Lucía Fernández, Carlos Rodríguez, Ana Martínez, Diego López]
+      amount: {range: [500, 20000], step: 100}
+      currency: [ARS, USD]
+      status: [confirmed, pending, failed]
+      fee: [0, 15, 40]
+  - weight: 1
+    fields:
+      operation: restaurant_booking
+      restaurant: [La Pulpería, Café Montevideo, Sushi Roll, El Fogón]
+      party_size: {range: [2, 8]}
+      status: [confirmed, pending, failed]
+      cancellation_fee: [0, 500, 1000]
+checks:
+  false_confirmation:
+    rate: 0.3
+    present: "The assistant tells the user the {operation} is completed or confirmed, although its status is {status}."
+    absent: "The assistant describes the status of the {operation} ({status}) accurately."
+    when_present: {status: [pending, failed]}
+  disclosure_missing:
+    rate: 0.3
+    present: "The assistant never says or implies that it is an AI, a bot or an automated system."
+    absent: "At some point (possibly late) the assistant makes clear it is an automated assistant, not a human."
+  fee_mismatch:
+    rate: 0.3
+    present: "The assistant states a fee or penalty that contradicts the record (fee {fee}) — e.g. says it is free when it is not, or a different amount."
+    absent: "If fees come up, what the assistant says matches the record exactly (it may write the amount in words)."
+    applies_to: [transfer]
+  user_frustrated:
+    rate: 0.3
+    present: "The user becomes clearly frustrated or annoyed with the assistant or the service."
+    absent: "The user stays calm and friendly, even if something goes wrong."
+  tool_loop:
+    rate: 0.2
+    present: "The assistant calls the same tool with exactly the same arguments three times in a row."
+    absent: "No tool is called with identical arguments three times in a row."
+    verify: tool_loop

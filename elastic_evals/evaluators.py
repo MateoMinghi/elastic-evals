@@ -83,24 +83,35 @@ class LocalHeadEvaluator(Evaluator):
         from sklearn.linear_model import LogisticRegression
         return LogisticRegression(max_iter=2000, class_weight="balanced", C=4.0)
 
-    def fit(self, convs, labels, questions):
-        """Train one head per question; return out-of-fold p for the training conversations."""
+    def fit(self, convs, labels, questions, extra=None):
+        """Train one head per question; return out-of-fold p for the labelled conversations.
+
+        extra = (conversations, labels) used for training only, never for measuring: distillation
+        trains on LLM-judge labels while thresholds and floors stay measured on human labels."""
         from sklearn.model_selection import KFold, StratifiedKFold
         oof = {}
+        ex_convs, ex_labels = extra or ([], {})
         for q in questions:
             have = [c for c in convs if (c["id"], q.name) in labels]
             y = np.array([labels[(c["id"], q.name)] for c in have])
-            if len(set(y.tolist())) < 2:
+            ex = [c for c in ex_convs if (c["id"], q.name) in ex_labels]
+            ey = np.array([ex_labels[(c["id"], q.name)] for c in ex])
+            if len(set(y.tolist()) | set(ey.tolist())) < 2 or not len(have):
                 continue
             x = self.embed(have, q)
-            self.heads[q.name] = self._head().fit(x, y)
+            ex_x = self.embed(ex, q) if ex else np.zeros((0, x.shape[1]))
+
+            def train(xi, yi):
+                return self._head().fit(np.vstack([xi, ex_x]), np.concatenate([yi, ey]) if len(ey) else yi)
+
+            self.heads[q.name] = train(x, y)
             smallest = min(np.unique(y, return_counts=True)[1])
             splitter = (StratifiedKFold(min(5, int(smallest)), shuffle=True, random_state=0) if smallest >= 2
                         else KFold(5, shuffle=True, random_state=0))
             for tr, va in splitter.split(x, y):
-                if len(set(y[tr].tolist())) < 2:
+                if len(set(y[tr].tolist()) | set(ey.tolist())) < 2:
                     continue
-                head = self._head().fit(x[tr], y[tr])
+                head = train(x[tr], y[tr])
                 for i, pr in zip(va, head.predict_proba(x[va])):
                     oof[(have[i]["id"], q.name)] = self._out(q, head.classes_, pr)
         return oof
