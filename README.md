@@ -18,8 +18,11 @@ v0.2 implements the design end to end; see [DESIGN.md §14](docs/DESIGN.md#14-im
 | The production path is lossless | [PIPELINE.md](experiments/results/PIPELINE.md): the same holdout replayed as OTel spans through collectors, Kafka, OpenSearch and the worker gives the same 93.5%, check by check |
 | Distillation replaces judge calls | [DISTILL.md](experiments/results/DISTILL.md): 93.9%, $53 / 1M, 20% sent to an LLM |
 | Single-node storage footprint and query latency | [LOAD.md](experiments/results/LOAD.md) |
+| No span lost when a cluster node dies mid-ingest; rollover by size | [CLUSTER.md](experiments/results/CLUSTER.md) |
 
-Not yet proven: real traffic with human labels, OpenSearch at billions of spans, a live Sentry installation.
+Everything in the design is built. Not yet proven: real traffic with human labels (run `python -m elastic_evals gate` on it: the phase-1 gate), OpenSearch at billions of spans, a live Sentry installation.
+
+Beyond the cascade: trajectory and per-step (observation) checks, Presidio redaction at the gateway, S3 offload of very large content, re-pricing of stored spans, OpenSearch Dashboards saved objects, Hugging Face classifier and zero-shot evaluator adapters.
 
 ## Layout
 
@@ -71,6 +74,7 @@ python -m elastic_evals run       --suite examples/banking_suite.yaml --calib ca
 python -m elastic_evals synth     --spec examples/banking_synth.yaml --n 50 --out synth.jsonl
 python -m elastic_evals calibrate ... --pool unlabelled.jsonl --teacher llm_haiku        # distillation
 python -m elastic_evals experiment --suite S --calib calib/ --items items.jsonl --agent my_pkg.agent:run --report run.json
+python -m elastic_evals gate      --suite examples/banking_suite.yaml --data human_labelled.jsonl          # phase-1 gate
 ```
 
 Conversations are JSONL:
@@ -79,7 +83,7 @@ Conversations are JSONL:
 {"id": "...", "lang": "es", "turns": [{"role": "user", "text": "..."}, {"role": "tool", "name": "...", "args": {}, "result": "..."}, {"role": "assistant", "text": "..."}], "record": {"status": "pending", "fee": 0}}
 ```
 
-Calibration data adds `"labels": {"check": 0|1|"class"}`.
+Calibration data adds `"labels": {"check": 0|1|"class"}`; observation checks are labelled per step as `"check@<span_id>"`.
 
 ### In your test suite
 
@@ -112,6 +116,7 @@ sentry_sdk.init(dsn=..., before_send=before_send(ui_url="https://evals.example.c
 python -m venv .venv && .venv/bin/pip install -e ".[all]"
 cd collector && go test ./... && builder --config builder-config.yaml   # OCB v0.163.0 -> _build/eecol
 cd ui && npm ci && npm run build
-pytest                     # integration tests skip when OpenSearch / Postgres / Kafka / eecol are absent
+pytest                     # integration tests skip when OpenSearch / Postgres / Kafka / eecol / Dashboards are absent
+EE_RUN_SLOW=1 pytest tests/test_hf_evaluators.py                       # CPU transformer adapters
 cd ui && EE_UI_URL=http://localhost:8000 npx playwright test           # against a running, seeded API
 ```
