@@ -1,0 +1,184 @@
+{
+ "hosted: labelled only": {
+  "accuracy": {
+   "false_confirmation": 0.9433333333333334,
+   "disclosure_missing": 0.9933333333333333,
+   "fee_mismatch": 0.9333333333333333,
+   "user_frustrated": 0.8066666666666666,
+   "tool_loop": 1.0
+  },
+  "mean": 0.9353333333333333,
+  "usd_per_1M": 83.03770666666667,
+  "ms": 553.8116292900394,
+  "llm_share": 0.36333333333333334,
+  "routes": {
+   "false_confirmation": [
+    "rules",
+    "e5",
+    "jev",
+    "llm_haiku"
+   ],
+   "disclosure_missing": [
+    "rules"
+   ],
+   "fee_mismatch": [
+    "jev",
+    "llm_haiku"
+   ],
+   "user_frustrated": [
+    "e5",
+    "jev",
+    "llm_haiku"
+   ],
+   "tool_loop": [
+    "rules"
+   ]
+  },
+  "hosted": [
+   "jev",
+   "llm_haiku"
+  ],
+  "decided_by_local": {
+   "false_confirmation": 0.13291139240506328,
+   "disclosure_missing": 0.0,
+   "fee_mismatch": 0.0,
+   "user_frustrated": 0.5949367088607594,
+   "tool_loop": 0.0
+  },
+  "below_floor": []
+ },
+ "hosted: + distilled from llm_haiku on 300 unlabelled": {
+  "accuracy": {
+   "false_confirmation": 0.9466666666666667,
+   "disclosure_missing": 0.9933333333333333,
+   "fee_mismatch": 0.9333333333333333,
+   "user_frustrated": 0.82,
+   "tool_loop": 1.0
+  },
+  "mean": 0.9386666666666666,
+  "usd_per_1M": 52.82037333333333,
+  "ms": 587.2678652067013,
+  "llm_share": 0.19666666666666666,
+  "routes": {
+   "false_confirmation": [
+    "rules",
+    "e5",
+    "jev",
+    "llm_luna"
+   ],
+   "disclosure_missing": [
+    "rules"
+   ],
+   "fee_mismatch": [
+    "jev",
+    "llm_luna"
+   ],
+   "user_frustrated": [
+    "e5",
+    "jev"
+   ],
+   "tool_loop": [
+    "rules"
+   ]
+  },
+  "hosted": [
+   "jev",
+   "llm_luna"
+  ],
+  "decided_by_local": {
+   "false_confirmation": 0.13924050632911392,
+   "disclosure_missing": 0.0,
+   "fee_mismatch": 0.0,
+   "user_frustrated": 0.44936708860759494,
+   "tool_loop": 0.0
+  },
+  "below_floor": []
+ },
+ "teacher_agreement_on_pool": {
+  "false_confirmation": 0.9733333333333334,
+  "disclosure_missing": 0.9966666666666667,
+  "fee_mismatch": 0.9833333333333333,
+  "user_frustrated": 0.83,
+  "tool_loop": 0.9233333333333333
+ },
+ "local-only: labelled only": {
+  "accuracy": {
+   "false_confirmation": 0.8266666666666667,
+   "disclosure_missing": 0.9933333333333333,
+   "fee_mismatch": 0.8233333333333334,
+   "user_frustrated": 0.72,
+   "tool_loop": 1.0
+  },
+  "mean": 0.8726666666666667,
+  "usd_per_1M": 0.0,
+  "ms": 42.86537874330557,
+  "llm_share": 0.0,
+  "routes": {
+   "false_confirmation": [
+    "rules",
+    "e5"
+   ],
+   "disclosure_missing": [
+    "rules"
+   ],
+   "fee_mismatch": [
+    "rules"
+   ],
+   "user_frustrated": [
+    "e5"
+   ],
+   "tool_loop": [
+    "rules"
+   ]
+  },
+  "hosted": [],
+  "decided_by_local": {
+   "false_confirmation": 0.25949367088607594,
+   "disclosure_missing": 0.0,
+   "fee_mismatch": 0.0,
+   "user_frustrated": 1.0,
+   "tool_loop": 0.0
+  },
+  "below_floor": []
+ },
+ "local-only: + distilled from llm_haiku on 300 unlabelled": {
+  "accuracy": {
+   "false_confirmation": 0.8566666666666667,
+   "disclosure_missing": 0.9933333333333333,
+   "fee_mismatch": 0.8233333333333334,
+   "user_frustrated": 0.7433333333333333,
+   "tool_loop": 1.0
+  },
+  "mean": 0.8833333333333332,
+  "usd_per_1M": 0.0,
+  "ms": 32.80340412331194,
+  "llm_share": 0.0,
+  "routes": {
+   "false_confirmation": [
+    "rules",
+    "e5"
+   ],
+   "disclosure_missing": [
+    "rules"
+   ],
+   "fee_mismatch": [
+    "rules"
+   ],
+   "user_frustrated": [
+    "e5"
+   ],
+   "tool_loop": [
+    "rules"
+   ]
+  },
+  "hosted": [],
+  "decided_by_local": {
+   "false_confirmation": 0.25949367088607594,
+   "disclosure_missing": 0.0,
+   "fee_mismatch": 0.0,
+   "user_frustrated": 1.0,
+   "tool_loop": 0.0
+  },
+  "below_floor": []
+ }
+}

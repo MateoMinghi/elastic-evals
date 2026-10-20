@@ -33,6 +33,8 @@ class CacheMiss(RuntimeError):
 
 
 def _api_key(env: str = "OPENROUTER_API_KEY") -> str:
+    if not os.environ.get(env):
+        load_env()  # EVAL_ENV_FILE, read lazily so library users get the same behaviour as the CLI
     key = os.environ.get(env)
     if not key:
         raise RuntimeError(f"{env} is not set (load it from an env file outside git)")

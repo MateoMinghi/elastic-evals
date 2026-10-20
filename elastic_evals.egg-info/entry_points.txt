@@ -1,0 +1,5 @@
+[console_scripts]
+elastic-evals = elastic_evals.__main__:main
+
+[pytest11]
+elastic_evals = elastic_evals.pytest_plugin

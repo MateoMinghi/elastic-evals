@@ -232,8 +232,13 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
     @app.get("/v1/scores/summary")
     def score_summary(c: Ctx = Depends(need("scores:read")), frm: str | None = Query(None, alias="from"),
                       to: str | None = None, agent: str | None = None, calibration_id: str | None = None,
-                      interval: str = "day"):
+                      experiment: str | None = None, interval: str = "day"):
+        # production decisions only, unless an experiment run is asked for
         filt: list[dict[str, Any]] = [tenant_filter(c.tenant), {"term": {"decision": True}}]
+        if experiment:
+            filt += [{"term": {"experiment.run_id": experiment}}, {"term": {"sample_reason": "experiment"}}]
+        else:
+            filt.append({"term": {"sample_reason": "route"}})
         if frm or to:
             filt.append({"range": {"timestamp": {k: v for k, v in (("gte", frm), ("lte", to)) if v}}})
         if agent:
