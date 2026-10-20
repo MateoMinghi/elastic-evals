@@ -65,7 +65,7 @@ def test_gates(calib):
     assert exps.compare(base, same)["changed_items"] == []
 
 
-def test_pytest_plugin(pytester, calib):
+def test_pytest_plugin(pytester, calib, pytestconfig):
     d, _, _, _ = calib
     ok, bad = None, None
     for c in load("synthetic.jsonl", 100):
@@ -89,7 +89,9 @@ def test_expected_values(ee):
     assert ee.check(OK, expect={{"tool_loop": 0}})["tool_loop"] == 0
 """)
     report = pytester.path / "run.json"
-    res = pytester.runpytest("-p", "elastic_evals.pytest_plugin", f"--ee-report={report}")
+    # installed packages register the plugin through the pytest11 entry point; otherwise load it explicitly
+    load = [] if pytestconfig.pluginmanager.has_plugin("elastic_evals") else ["-p", "elastic_evals.pytest_plugin"]
+    res = pytester.runpytest(*load, f"--ee-report={report}")
     res.assert_outcomes(passed=2, failed=1)
     res.stdout.fnmatch_lines(["*critical check 'false_confirmation' flagged*", "*elastic-evals*", "*gate false_confirmation*FAIL*"])
     run = json.loads(report.read_text())
