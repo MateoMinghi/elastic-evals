@@ -6,6 +6,7 @@ Engine (no services needed):
   run         --suite S --calib calib/ --data convs.jsonl --out scores.jsonl
   experiment  --suite S --calib calib/ --items items.jsonl --agent pkg.mod:fn [--baseline run.json] [--report run.json]
   synth       --spec spec.yaml --n 50 --out synth.jsonl
+  gate        --suite S --data human_labelled.jsonl [--folds 5]           phase-1 gate (exit code 1 if not passed)
 
 Services (OpenSearch, Postgres, Kafka; see deploy/):
   setup       [--pools shared] [--tenant acme --dedicated] [--admin-key] [--dashboards URL]
@@ -172,6 +173,25 @@ def cmd_setup(a):
         print(f"admin API key for {a.tenant}: {key_id}.{secret}")
 
 
+def cmd_gate(a):
+    import yaml
+    from .gates import phase1
+    from .suite import Suite
+    suite = Suite.load(a.suite)
+    suite.policy.allow_hosted = suite.policy.allow_hosted and not a.local_only
+    reasons = yaml.safe_load(Path(a.reasons).read_text()) if a.reasons else {}
+    res = phase1(suite, read_jsonl(a.data), _client(suite.policy.allow_hosted), a.folds, reasons=reasons)
+    rows = [[q, f"{100 * r['engine']:.1f}", f"{r['best_single']} {100 * r['best_single_accuracy']:.1f}",
+             f"{100 * r['se']:.1f}", "PASS" if r["pass"] else ("documented" if r["reason"] else "FAIL")]
+            for q, r in res["checks"].items()]
+    print(tabulate(rows, ["check", "engine %", "best single %", "1 SE", "gate"], tablefmt="github"))
+    print(f"engine: ${res['engine_usd_per_1M']:.0f} / 1M conv, {res['engine_ms']:.0f} ms, "
+          f"{100 * res['engine_llm_share']:.0f}% sent to an LLM; phase-1 gate {'PASSED' if res['passed'] else 'NOT PASSED'}")
+    if a.out:
+        Path(a.out).write_text(json.dumps(res, indent=1))
+    return 0 if res["passed"] else 1
+
+
 def cmd_dashboards(a):
     from .dashboards import ndjson
     Path(a.out).write_text(ndjson(a.prefix))
@@ -334,6 +354,13 @@ def main(argv=None):
     st.add_argument("--admin-key", action="store_true")
     st.add_argument("--dashboards", default=os.environ.get("EE_DASHBOARDS_URL"),
                     help="OpenSearch Dashboards URL: import the saved objects")
+    g = sub.add_parser("gate", help="phase-1 gate: cross-validated engine against the best single judge per check")
+    g.add_argument("--suite", required=True)
+    g.add_argument("--data", required=True, help="human-labelled conversations (JSONL)")
+    g.add_argument("--folds", type=int, default=5)
+    g.add_argument("--reasons", help="YAML: check -> documented reason it may miss the gate")
+    g.add_argument("--local-only", action="store_true")
+    g.add_argument("--out")
     db = sub.add_parser("dashboards", help="write the OpenSearch Dashboards saved objects as NDJSON")
     db.add_argument("--out", required=True)
     db.add_argument("--prefix", default=os.environ.get("EE_INDEX_PREFIX", "ee"))
@@ -401,7 +428,7 @@ def main(argv=None):
                "replay": cmd_replay, "suite": cmd_suite, "register": cmd_register, "shadow": cmd_lifecycle,
                "promote": cmd_lifecycle, "reject": cmd_lifecycle, "drift": cmd_drift, "annotate": cmd_annotate,
                "reprice": cmd_reprice, "prices": cmd_prices,
-               "dashboards": cmd_dashboards}[args.cmd]
+               "dashboards": cmd_dashboards, "gate": cmd_gate}[args.cmd]
     return handler(args) or 0
 
 
