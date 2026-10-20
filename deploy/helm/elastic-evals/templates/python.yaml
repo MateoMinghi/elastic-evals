@@ -1,0 +1,104 @@
+{{- if not .Values.artifacts.uri }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "ee.fullname" . }}-artifacts
+  labels: {{- include "ee.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteMany]
+  {{- with .Values.artifacts.pvc.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources: { requests: { storage: {{ .Values.artifacts.pvc.size }} } }
+{{- end }}
+{{- $components := dict "api" (list "serve" "--port" "8000") "tracker" (list "tracker" "--trace-idle" (toString .Values.tracker.traceIdleSeconds) "--session-idle" (toString .Values.tracker.sessionIdleSeconds)) "worker" (ternary (list "worker" "--embed") (list "worker") .Values.worker.embed) }}
+{{- range $name, $args := $components }}
+{{- $cfg := index $.Values $name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ee.fullname" $ }}-{{ $name }}
+  labels: {{- include "ee.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: {{ if eq $name "tracker" }}1{{ else }}{{ $cfg.replicas }}{{ end }}
+  {{- if eq $name "tracker" }}
+  strategy: { type: Recreate }   # one consumer group member is enough; recreate avoids double counting during rollout
+  {{- end }}
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: {{ $name }} }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: {{ $name }} }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001 }
+      containers:
+        - name: {{ $name }}
+          image: {{ include "ee.image" $ }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          args: {{ toJson $args }}
+          env:
+            {{- include "ee.env" $ | nindent 12 }}
+            {{- if and (eq $name "api") $.Values.sentry.existingSecret }}
+            - { name: EE_SENTRY_URL, value: {{ $.Values.sentry.url | quote }} }
+            - { name: EE_SENTRY_ORG, value: {{ $.Values.sentry.org | quote }} }
+            - name: EE_SENTRY_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: {{ $.Values.sentry.existingSecret }}, key: EE_SENTRY_CLIENT_SECRET } }
+            - name: EE_SENTRY_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ $.Values.sentry.existingSecret }}, key: EE_SENTRY_TOKEN } }
+            {{- end }}
+          {{- if eq $name "api" }}
+          ports: [{ name: http, containerPort: 8000 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8000 }, periodSeconds: 10 }
+          {{- end }}
+          resources: {{- toYaml $cfg.resources | nindent 12 }}
+          {{- include "ee.artifactMount" $ | nindent 10 }}
+      {{- include "ee.artifactVolume" $ | nindent 6 }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ee.fullname" . }}-api
+  labels: {{- include "ee.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: api }
+  ports: [{ name: http, port: 80, targetPort: 8000 }]
+{{- if .Values.worker.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "ee.fullname" . }}-worker
+  labels: {{- include "ee.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: {{ include "ee.fullname" . }}-worker }
+  minReplicas: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: {{ .Values.worker.autoscaling.targetCPU }} } }
+{{- end }}
+{{- if .Values.api.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "ee.fullname" . }}-api
+  labels: {{- include "ee.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.api.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.api.ingress.tls }}
+  tls: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.api.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: {{ include "ee.fullname" . }}-api, port: { number: 80 } } }
+{{- end }}

@@ -1,0 +1,43 @@
+# Ingest: consume spans from Kafka and write obs / stage documents to OpenSearch.
+extensions:
+  health_check:
+    endpoint: ${env:EE_INGEST_HEALTH:-0.0.0.0:13134}
+
+receivers:
+  kafka:
+    brokers: ["${env:EE_KAFKA_BROKERS:-localhost:9092}"]
+    group_id: ${env:EE_INGEST_GROUP:-ee-ingest}
+    traces:
+      topics: ["${env:EE_KAFKA_TOPIC:-ee-spans}"]
+      encoding: otlp_proto
+    initial_offset: earliest
+    message_marking:
+      after: true          # commit offsets only once OpenSearch accepted the batch
+      on_error: false
+
+processors:
+  batch:
+    send_batch_size: 1000
+    timeout: 1s
+
+exporters:
+  elasticevals_opensearch:
+    endpoint: ${env:EE_OPENSEARCH_URL:-http://localhost:9200}
+    prefix: ${env:EE_INDEX_PREFIX:-ee}
+    preview_chars: 200
+    content: stage
+    prices_file: ${env:EE_PRICES_FILE:-}
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 0   # keep retrying: Kafka holds the data meanwhile
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [kafka]
+      processors: [batch]
+      exporters: [elasticevals_opensearch]
+  telemetry:
+    metrics:
+      level: none

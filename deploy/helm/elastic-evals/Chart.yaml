@@ -1,0 +1,6 @@
+apiVersion: v2
+name: elastic-evals
+description: Observability and calibrated evaluation for production AI agents, on OpenSearch
+type: application
+version: 0.2.0
+appVersion: "0.2.0"

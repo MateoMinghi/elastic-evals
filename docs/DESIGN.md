@@ -1,7 +1,7 @@
 # elastic-evals: design v1.0
 
-Status: **design of record**, 2026-10-20. Supersedes [`PROPOSAL.md`](PROPOSAL.md), which is kept as history.
-Evidence: [`experiments/`](../experiments/). Research: [`docs/research/`](research/). Prototype: [`elastic_evals/`](../elastic_evals/).
+Status: **design of record**, 2026-10-20; **implemented as v0.2** (§14). Supersedes [`PROPOSAL.md`](PROPOSAL.md), which is kept as history.
+Evidence: [`experiments/`](../experiments/). Research: [`docs/research/`](research/). Code: [`elastic_evals/`](../elastic_evals/) (Python), [`collector/`](../collector/) (Go), [`ui/`](../ui/) (TypeScript), [`deploy/`](../deploy/).
 
 ---
 
@@ -43,7 +43,7 @@ On a holdout from a model family never used in development, the engine:
 - engine first, then storage, then UI;
 - OpenTelemetry GenAI semantic conventions on the wire.
 
-**Next gate:** calibrate on ~200 real, human-labelled agent conversations, and load-test OpenSearch (§12).
+**Next gate:** calibrate on ~200 real, human-labelled agent conversations, and load-test OpenSearch on a real cluster (§12). Everything else in this document is implemented and tested (§14).
 
 ---
 
@@ -307,10 +307,10 @@ elastic-evals fills the gaps in §2.1:
 2. **Collector tier 1** load-balances by `trace_id`. **Tier 2** runs redaction (a Presidio-backed processor), tenant tagging, the semconv normalizer and routing.
 3. **Kafka** buffers the stream, absorbs spikes, allows replay, and lets ingest and evaluation consume the same stream.
 4. **Ingest workers** (a second Collector deployment in Go: a Kafka receiver plus our OpenSearch exporter, §11):
-   - normalise attributes and compute cost from `model_prices` (with a re-pricing job);
-   - write `obs` (truncated) and `payload` (full content) documents, with large blobs in S3;
-   - update the trace-complete tracker.
-5. **Evaluation workers** run the engine (§6) on completed conversations, *before* the retention decision (§7).
+   - normalise attributes and compute cost from `model_prices` (exclusive token buckets, tiers, start dates);
+   - write `obs` (truncated, typed) and `stage` (full content, **verbatim**, kept a few days) documents with `op_type=create`, deterministic ids and routing by trace id; offsets are committed only after OpenSearch accepted the batch.
+5. **The tracker** (Python, its own consumer group on the same topic) reads only ids, parents and timestamps and maintains `trace_tracker`. Spans are grouped by trace first, because usually only the root carries `gen_ai.conversation.id` and children arrive before it (§14, L16).
+6. **Evaluation workers** claim due conversations (`FOR UPDATE SKIP LOCKED`), rebuild them from `obs` + `stage`/`payload`, run the engine (§6), write scores, rollups and metrics, and take the retention decision (§7): kept content is copied from `stage` to `payload`.
 
 ### 5.3 OpenSearch layout
 
@@ -319,6 +319,7 @@ Based on [`research/opensearch.md`](research/opensearch.md).
 | Index | One document per | Notes |
 |---|---|---|
 | `obs-*` | span | Typed columns (ids, parent, trace/session, name, type, model, exclusive token buckets, cost, latency, status, `date_nanos`); trace attributes copied on; input/output truncated to ~200 chars; metadata as `flat_object`. Strict mapping, `zstd`, routing by `trace_id`, **never updated** |
+| `stage-*` | span with content | Every span's full content as received, for a few days, so evaluators see everything before the retention decision. Not searchable beyond the window |
 | `payload-*` | span with kept content | Full messages: `match_only_text` for search, raw JSON with `index: false`. Shorter retention |
 | `scores-*` | score | The §6.6 record, with trace context copied on (agent, flow, model, tags, experiment ids) so it can be filtered without joins. A correction is a new score that `supersedes` the old one |
 | `traces-*` | completed conversation or trace | Rollup written on completion: cost, tokens, latency, error flag, tool sequence, latest score per check, Sentry issue ids. **The source for list views.** Avoids Langfuse's expensive trace-level aggregates |
@@ -447,12 +448,12 @@ For each conversation:
 
 ```jsonc
 {
-  "id": "sha256(calibration|evaluator_version|conversation|check|criteria_version)",   // deterministic, idempotent
+  "id": "sha256(calibration|evaluator_version|conversation@version|check|criteria_version|sample_reason)",   // deterministic, idempotent
   "tenant_id": "...", "conversation_id": "...", "trace_id": "...", "observation_id": null, "session_id": "...",
   "check": "fee_mismatch", "value": 1, "p": 0.97, "probs": {"yes": 0.97, "no": 0.03},
   "label": null, "explanation": null,
   "decision": true,                       // false for shadow and audit scores
-  "sample_reason": "route",               // route | shadow | random_audit | experiment | annotation
+  "sample_reason": "route",               // route | shadow | random_audit | candidate | experiment | annotation
   "evaluator": {"id": "jev", "kind": "jev", "tier": 2, "version": "typesafe/jev-1.14", "criteria_version": "3"},
   "calibration_id": "cal_2026_10_20_01", "route": ["jev", "llm_haiku"], "strictness": 1.0,
   "cost_usd": 0.0000372, "latency_ms": 190, "lang": "es",
@@ -462,7 +463,7 @@ For each conversation:
 }
 ```
 
-Every field above `trace_ctx` is emitted by the prototype or derivable from it. Export to OTel's `gen_ai.evaluation.result` is optional and lossy.
+Every field is emitted by the engine. The conversation version (a hash of its turns and record) is part of the id, so a session re-scored after new turns gets new scores instead of colliding with the old ones; `candidate` marks a shadow calibration's scores. Export to OTel's `gen_ai.evaluation.result` is optional and lossy.
 
 ### 6.7 Drift monitor and recalibration
 
@@ -600,33 +601,21 @@ The part Langfuse gives away for free, and the part we must build. Five screens;
 
 **Fallback if the team wants to delay Go.** Run the stock Collector, write the ingest exporter in Python first, and move it to Go after the load test. Not recommended: the Collector customisation (tenant tagging, normaliser, index layout) needs Go from day one.
 
----|---|---|
-| Engine, SDK, workers, API | Python (FastAPI, Pydantic) | The prototype is Python; the ML ecosystem; the PayMe engine is Python |
-| Local heads | sentence-transformers (multilingual-e5-small), scikit-learn; ONNX Runtime for serving | CPU; SetFit for few-shot refreshes |
-| Hosted evaluators | OpenRouter (chat + Decisions API) or direct provider APIs | Cached, budget-capped client; pinned model versions |
-| Collector | `otelcol-contrib`: `loadbalancing`, `tail_sampling`, `redaction`, `transform` | The redaction processor is beta |
-| Queue | Kafka (Redpanda for small installs) | |
-| Event store | OpenSearch 3.x | §5.3 |
-| Config store | Postgres | |
-| Blobs | S3-compatible | |
-| UI | React + TypeScript | |
-| Deployment | Docker Compose for development; Helm for production | |
-
 ---
 
 ## 12. Roadmap
 
 Each phase ends with a measurable gate.
 
-| Phase | Scope | Exit gate |
-|---|---|---|
-| **0. Done** | Research; layer experiments; `elastic_evals` engine (suites, calibration, per-conversation runtime, audit/drift, local-only, CLI); synthetic sets A/B/C | On holdout C: matches the best single judge at lower cost and latency (✓) |
-| **1. Real-traffic validation** | Collect ~200 real, anonymised agent conversations; label them through a simple annotation CLI; calibrate; add `max_ms_per_conv`; multi-class checks; per-language reporting | Engine within 1 SE of the best judge per check on real labels, or a documented reason per check |
-| **2. Storage path + load test** | Collector config, Kafka, ingest workers, OpenSearch templates and ISM, Postgres schema, trace-complete tracker, `traces-*` rollups; replay synthetic traces at 2–3× target peak | Ingest latency, GB per million spans and dashboard times within budget, or switch the analytics sink |
-| **3. Engine as a service** | Evaluation workers on the stream; scores into `scores-*`; calibration lifecycle (candidate → shadow → active); drift alerts; eval-aware retention | Drift detection and recalibration work end to end on replayed traffic |
-| **4. Humans and offline** | Annotation queues with automatic filling; distillation loop; datasets and experiments; pytest plugin and CI gates; `synth` | A distilled head replaces judge calls on at least one check without breaching its floor |
-| **5. Sentry bridge** | Propagation guide; `before_send` helper; webhook bridge; External Issue links; quality-regression events | Click-through both ways on a demo; self-hosted proof of concept |
-| **6. UI and governance** | The 5 screens; two-tier tenancy; audit log; Helm chart | First external tenant |
+| Phase | Scope | Exit gate | Status (v0.2) |
+|---|---|---|---|
+| **0. Done** | Research; layer experiments; `elastic_evals` engine (suites, calibration, per-conversation runtime, audit/drift, local-only, CLI); synthetic sets A/B/C | On holdout C: matches the best single judge at lower cost and latency (✓) | ✓ |
+| **1. Real-traffic validation** | Collect ~200 real, anonymised agent conversations; label them through a simple annotation CLI; calibrate; add `max_ms_per_conv`; multi-class checks; per-language reporting | Engine within 1 SE of the best judge per check on real labels, or a documented reason per check | Tooling ✓ (annotation CLI and UI, budgets, multi-class, language floors). **Gate open: needs real conversations** |
+| **2. Storage path + load test** | Collector config, Kafka, ingest workers, OpenSearch templates and ISM, Postgres schema, trace-complete tracker, `traces-*` rollups; replay synthetic traces at 2–3× target peak | Ingest latency, GB per million spans and dashboard times within budget, or switch the analytics sink | Built ✓; single-node load test ✓ ([LOAD.md](../experiments/results/LOAD.md)). **Gate open: needs a target peak and a real cluster** |
+| **3. Engine as a service** | Evaluation workers on the stream; scores into `scores-*`; calibration lifecycle (candidate → shadow → active); drift alerts; eval-aware retention | Drift detection and recalibration work end to end on replayed traffic | ✓ The holdout replayed through the full path reproduces the engine exactly ([PIPELINE.md](../experiments/results/PIPELINE.md)); drift alerts, shadow comparison and promotion tested |
+| **4. Humans and offline** | Annotation queues with automatic filling; distillation loop; datasets and experiments; pytest plugin and CI gates; `synth` | A distilled head replaces judge calls on at least one check without breaching its floor | ✓ Frustration's route dropped the judge (e5 → Jev) and improved; −44% LLM calls overall ([DISTILL.md](../experiments/results/DISTILL.md)) |
+| **5. Sentry bridge** | Propagation guide; `before_send` helper; webhook bridge; External Issue links; quality-regression events | Click-through both ways on a demo; self-hosted proof of concept | Built and tested against a fake Sentry API. **Gate open: needs a Sentry installation** |
+| **6. UI and governance** | The 5 screens; two-tier tenancy; audit log; Helm chart | First external tenant | Built ✓ (UI with Playwright tests, dedicated and pooled tenants, scoped API keys, audit log, compose and Helm). **Gate open: first tenant** |
 
 ---
 
@@ -647,10 +636,50 @@ Each phase ends with a measurable gate.
 
 ---
 
+## 14. Implementation status (v0.2)
+
+Everything in §4–§11 exists and is tested, except where marked. Tests: `pytest` (33, offline and against real OpenSearch 3.9, Postgres 16, Kafka 4.1 and the built collector), `go test ./...` in `collector/`, Playwright in `ui/`.
+
+| Component | Where | Notes |
+|---|---|---|
+| Collector processor: tenant tagging, semconv normaliser (OpenInference, OpenLLMetry, Langfuse, legacy gen_ai), internal environments, content dropping | `collector/processor/eeprocessor` | Priority-ordered; never overwrites native `gen_ai.*`; source recorded in `ee.semconv.source` |
+| Collector exporter: `obs` + `stage` documents, pricing, pools, idempotent bulk | `collector/exporter/eeopensearchexporter` | 409 = already written; 429/5xx retry the batch; mapping errors dropped and logged |
+| Collector distribution | `collector/builder-config.yaml` (OCB v0.163.0) | OTLP, Kafka, batch, memory limiter, redaction, transform, tail sampling, load balancing |
+| OpenSearch layout | `elastic_evals/store/schema/*.json` | Component + index templates per pool, ISM hot → warm → delete, write aliases, `zstd`, `flat_object`, on-disk k-NN, star-tree metrics |
+| Postgres schema | `elastic_evals/store/schema/001_init.sql` | §5.4 plus `drift_alerts` |
+| Engine | `calibrate.py`, `engine.py`, `evaluators.py` | Budgets, language floors, multi-class checks, partial labels, evaluator registry, self-hosted judges, §6.6 records |
+| Tracker, worker, retention | `tracker.py`, `worker.py`, `conversation.py` | Trace-complete signal, session attribution, ingest-lag retries, eval-aware retention |
+| Calibration lifecycle, drift, shadow comparison | `registry.py`, `drift.py` | Tenant local-only policy enforced at promotion and at load |
+| Labels, annotation queues, agreement | `annotation.py` | Fill rules: audit disagreement, tier disagreement, low confidence, stratified |
+| Datasets, experiments, gates, pytest plugin | `experiments.py`, `pytest_plugin.py` | Versioned items; promptfoo-style assertions |
+| Synthetic sets, distillation | `synth.py`, `distill.py` | |
+| API, Sentry bridge | `api.py`, `sentry.py` | Scoped API keys per tenant; audit log; HMAC webhooks |
+| UI | `ui/` | The five screens of §10 |
+| Deployment | `Dockerfile`, `collector/Dockerfile`, `deploy/docker-compose.yml`, `deploy/helm/` | |
+
+**Not built yet:** a Presidio-backed redaction processor (the stock `redaction` processor runs instead), S3 blob offload for very large payloads, OpenSearch Dashboards saved objects, the `gen_ai.evaluation.result` export, observation-level and trajectory checks in the engine (the experiment assertions cover trajectories offline), a re-pricing job.
+
+**Lessons from building it:**
+
+| # | Lesson | Design consequence |
+|---|---|---|
+| L15 | The OTel SDK's batch processor silently drops spans when its queue (2,048 by default) overflows; a burst replay lost 61 of 300 conversations | Size SDK queues for bursts; the end-to-end test asserts span counts and serves hosted answers from cache, so any loss or change fails loudly |
+| L16 | Usually only root spans carry `gen_ai.conversation.id`, and children end (and arrive) before their root | The tracker groups by trace and attributes a trace to its session when any span names it; the worker finds a session's traces before fetching spans |
+| L17 | Re-encoding content changes what evaluators see (Go sorts JSON keys) | `stage` and `payload` keep content verbatim; only the searchable text is derived |
+| L18 | Embedding `confighttp.ClientConfig` in a Collector component config silently ignored every other field | Named, squashed field; a config-unmarshal test per component |
+| L19 | The production path reproduces the offline engine exactly (93.5% on the holdout, check by check) | The engine can be calibrated and evaluated offline with confidence |
+| L20 | Distillation pays: 93.9% (against 93.5%), $53 against $83 per 1M conversations, 20% against 36% sent to an LLM | Distillation is worth making routine (§6.8) |
+| L21 | With synthetic, problem-rich traffic, eval-aware retention kept 93% of conversations | Real traffic is mostly clean, so expect a much lower keep rate; measure it in phase 1 |
+
+---
+
 ## Appendix A: Evidence index
 
 - Single-layer experiments: [`experiments/results/RESULTS.md`](../experiments/results/RESULTS.md), [`tables.md`](../experiments/results/tables.md)
 - Engine: [`experiments/results/ENGINE_SUMMARY.md`](../experiments/results/ENGINE_SUMMARY.md), [`ENGINE.md`](../experiments/results/ENGINE.md), the calibration JSONs in `experiments/results/`
+- Production path: [`PIPELINE.md`](../experiments/results/PIPELINE.md) (`experiments/e2e_pipeline.py`)
+- Distillation: [`DISTILL.md`](../experiments/results/DISTILL.md) (`experiments/distill_experiment.py`)
+- Load test: [`LOAD.md`](../experiments/results/LOAD.md) (`experiments/load_test.py`)
 - Code:
   - `elastic_evals/`: the engine
   - `experiments/`: generators, runners, analysis

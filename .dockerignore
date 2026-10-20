@@ -1,0 +1,10 @@
+.git
+.venv
+**/node_modules
+ui/dist
+**/__pycache__
+experiments
+collector/_build
+.cache
+.artifacts
+*.pkl

@@ -1,0 +1,20 @@
+# Creates index templates, ISM policies, write aliases and the Postgres schema before every install/upgrade.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ee.fullname" . }}-setup-{{ .Release.Revision }}
+  labels: {{- include "ee.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: setup
+          image: {{ include "ee.image" . }}
+          args: ["setup", "--shards", "{{ .Values.setup.shards }}", "--replicas", "{{ .Values.setup.replicas }}",
+                 "--pools", "shared"{{ range $t, $p := .Values.tenancy.dedicatedPools }}, {{ $p | quote }}{{ end }}]
+          env: {{- include "ee.env" . | nindent 12 }}

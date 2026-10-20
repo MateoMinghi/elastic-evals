@@ -162,3 +162,8 @@ def test_sentry_before_send_links_event_and_span():
     import hmac
     sig = hmac.new(b"s", b"{}", hashlib.sha256).hexdigest()
     assert verify("s", b"{}", sig) and not verify("s", b"{}", "x") and not verify("s", b"{}", None)
+
+
+def test_helm_chart_carries_the_same_collector_configs():
+    for name in ("gateway.yaml", "ingest.yaml", "prices.json"):
+        assert (ROOT / "deploy/helm/elastic-evals/files" / name).read_text() == (ROOT / "deploy/collector" / name).read_text(), name

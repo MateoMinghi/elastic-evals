@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ee.fullname" . }}-collector
+  labels: {{- include "ee.labels" . | nindent 4 }}
+data:
+  gateway.yaml: |
+{{ .Files.Get "files/gateway.yaml" | indent 4 }}
+  ingest.yaml: |
+{{- $ingest := .Files.Get "files/ingest.yaml" | fromYaml }}
+{{- $_ := set (index $ingest.exporters "elasticevals_opensearch") "pools" .Values.tenancy.dedicatedPools }}
+{{ toYaml $ingest | indent 4 }}
+  prices.json: |
+{{ .Files.Get "files/prices.json" | indent 4 }}

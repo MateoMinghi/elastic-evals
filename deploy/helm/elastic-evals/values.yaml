@@ -1,0 +1,57 @@
+# External services. The chart does not run OpenSearch, Kafka or Postgres: point it at managed
+# or operator-run clusters (OpenSearch with remote-backed storage chosen at creation, DESIGN.md §5.3).
+opensearch:
+  url: http://opensearch:9200
+  indexPrefix: ee
+  existingSecret: ""        # keys: username, password (security plugin basic auth)
+kafka:
+  brokers: kafka:9092
+  topic: ee-spans
+postgres:
+  existingSecret: ee-postgres   # key: dsn (postgresql://user:pass@host:5432/db)
+hosted:
+  existingSecret: ""        # key: OPENROUTER_API_KEY; leave empty for local-only deployments
+sentry:
+  existingSecret: ""        # keys: EE_SENTRY_CLIENT_SECRET, EE_SENTRY_TOKEN; enables the webhook bridge
+  url: https://sentry.io
+  org: ""
+uiUrl: ""
+
+image:
+  repository: ghcr.io/mateominghi/elastic-evals
+  tag: ""                   # defaults to the chart appVersion
+  pullPolicy: IfNotPresent
+collectorImage:
+  repository: ghcr.io/mateominghi/elastic-evals-collector
+  tag: ""
+
+tenancy:
+  dedicatedPools: {}        # tenant -> index pool, e.g. {acme: acme}; everyone else is pooled in "shared"
+  defaultTenant: ""         # gateway fallback when spans carry no ee.tenant_id
+
+gateway:
+  replicas: 2
+  resources: { requests: { cpu: 500m, memory: 512Mi }, limits: { memory: 1Gi } }
+  service: { type: ClusterIP }
+ingest:
+  replicas: 2
+  resources: { requests: { cpu: 500m, memory: 512Mi }, limits: { memory: 1Gi } }
+api:
+  replicas: 2
+  resources: { requests: { cpu: 250m, memory: 512Mi }, limits: { memory: 1Gi } }
+  ingress: { enabled: false, className: "", host: "", tls: [] }
+tracker:
+  traceIdleSeconds: 30
+  sessionIdleSeconds: 300
+  resources: { requests: { cpu: 100m, memory: 256Mi } }
+worker:
+  replicas: 2
+  embed: false
+  resources: { requests: { cpu: "1", memory: 2Gi }, limits: { memory: 4Gi } }
+  autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 20, targetCPU: 70 }
+artifacts:
+  uri: ""                   # s3://bucket/prefix; empty uses a shared PVC
+  pvc: { size: 5Gi, storageClass: "" }
+setup:
+  shards: 3
+  replicas: 1

@@ -1,0 +1,58 @@
+# Tier 2 gateway: receive OTLP, tag tenant, redact, normalise semconv, publish to Kafka.
+# Tier 1 (not needed in development) is a stock collector with the loadbalancing exporter
+# (routing_key: traceID) in front of several gateways.
+extensions:
+  health_check:
+    endpoint: ${env:EE_GATEWAY_HEALTH:-0.0.0.0:13133}
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: ${env:EE_OTLP_GRPC:-0.0.0.0:4317}
+        include_metadata: true
+      http:
+        endpoint: ${env:EE_OTLP_HTTP:-0.0.0.0:4318}
+        include_metadata: true
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+  elasticevals:
+    tenant:
+      from_resource_attribute: ee.tenant_id
+      from_metadata: x-ee-tenant
+      default: ${env:EE_DEFAULT_TENANT:-}
+    normalize: true
+    internal_environments: [ee-internal]
+  redaction:
+    # Beta processor; a Presidio-backed processor replaces it later (DESIGN.md §5.2).
+    allow_all_keys: true
+    blocked_values:
+      - "\\b(?:\\d[ -]*?){13,16}\\b"          # card numbers
+      - "\\b[A-Z]{2}\\d{2}[A-Z0-9]{11,30}\\b"  # IBAN
+    summary: silent
+  batch:
+    send_batch_size: 2048
+    timeout: 1s
+
+exporters:
+  kafka:
+    brokers: ["${env:EE_KAFKA_BROKERS:-localhost:9092}"]
+    traces:
+      topic: ${env:EE_KAFKA_TOPIC:-ee-spans}
+      encoding: otlp_proto
+    partition_traces_by_id: true
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, elasticevals, redaction, batch]
+      exporters: [kafka]
+  telemetry:
+    metrics:
+      level: none
