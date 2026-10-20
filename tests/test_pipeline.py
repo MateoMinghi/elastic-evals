@@ -3,15 +3,10 @@ tracker -> worker -> scores, rollups, retention. Needs OpenSearch, Postgres, Kaf
 collector (collector/_build/eecol)."""
 
 import asyncio
-import json
-import os
-import socket
-import subprocess
 import time
 import uuid
 from pathlib import Path
 
-import httpx
 import pytest
 import yaml
 

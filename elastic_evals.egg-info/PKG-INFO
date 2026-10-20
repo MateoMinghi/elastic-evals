@@ -32,36 +32,78 @@ Requires-Dist: elastic-evals[dev,local,otel,sentry,service]; extra == "all"
 
 # elastic-evals
 
-Open-source observability and evaluation for production AI agents. The plan:
-- OpenTelemetry ingestion, with OpenSearch as the event store;
-- a calibrated cascade of evaluators: rules → small local classifiers → Jev → LLM judges → human review;
-- links to Sentry in both directions.
+Open-source observability and evaluation for production AI agents:
+- **OpenTelemetry in.** Agents emit GenAI spans; a custom Collector tags tenants, normalises OpenInference / OpenLLMetry / Langfuse attributes and redacts.
+- **OpenSearch as the event store**, Postgres for configuration, Kafka in between.
+- **A calibrated cascade of evaluators** scores every conversation: rules → small local classifiers → Jev → one LLM judge, with routes chosen from labels and humans as ground truth.
+- **A drift monitor** for the evaluators themselves, **eval-aware retention**, and a **Sentry bridge**.
 
-**Status:** design and working prototype.
+Design of record: [docs/DESIGN.md](docs/DESIGN.md). Evidence: [experiments/results/](experiments/results/).
 
-- **Design:** [docs/DESIGN.md](docs/DESIGN.md) (v1.0). Background research: [docs/research/](docs/research/). The earlier [proposal](docs/PROPOSAL.md) is kept for history.
-- **Evidence:** [experiments/results/ENGINE_SUMMARY.md](experiments/results/ENGINE_SUMMARY.md) for the engine, [experiments/results/RESULTS.md](experiments/results/RESULTS.md) for the single layers.
-- **Prototype:** the `elastic_evals` package, an evaluation engine with no storage or UI yet.
+## Status
 
-## The prototype in one minute
+v0.2 implements the design end to end; see [DESIGN.md §14](docs/DESIGN.md#14-implementation-status-v02). Highlights:
 
-Describe your checks in a suite file (`examples/banking_suite.yaml`): the question wording, the rule and the local-model view per question, which evaluators are allowed, and the policy (target accuracy, local-only or hosted, audit rate).
+| Claim | Evidence |
+|---|---|
+| The engine matches the best single LLM judge at lower cost and latency | [ENGINE_SUMMARY.md](experiments/results/ENGINE_SUMMARY.md): 93.5% on the holdout, $83 / 1M conversations, 36% sent to an LLM |
+| The production path is lossless | [PIPELINE.md](experiments/results/PIPELINE.md): the same holdout replayed as OTel spans through collectors, Kafka, OpenSearch and the worker gives the same 93.5%, check by check |
+| Distillation replaces judge calls | [DISTILL.md](experiments/results/DISTILL.md): 93.9%, $53 / 1M, 20% sent to an LLM |
+| Single-node storage footprint and query latency | [LOAD.md](experiments/results/LOAD.md) |
 
-Calibrate on labelled conversations. The engine:
-- learns confidence thresholds per layer;
-- trains the small local heads;
-- picks the cheapest set of hosted evaluators, and the route per question, that stays near the best achievable accuracy.
+Not yet proven: real traffic with human labels, OpenSearch at billions of spans, a live Sentry installation.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `elastic_evals/` | Python: engine, calibration, evaluators, tracker, worker, API (FastAPI), Sentry bridge, CLI, pytest plugin |
+| `collector/` | Go: the `elasticevals` processor and `elasticevals_opensearch` exporter, built into the `eecol` Collector distribution |
+| `ui/` | TypeScript + React: conversations, viewer, scores and calibration, experiments, annotation |
+| `deploy/` | Collector configs, docker compose, Helm chart |
+| `examples/` | A suite (`banking_suite.yaml`) and a synthetic test-set spec (`banking_synth.yaml`) |
+| `experiments/` | The studies behind the design, with their data and results |
+| `tests/` | Offline tests and integration tests against real OpenSearch, Postgres, Kafka and collectors |
+
+## Run the whole stack
 
 ```bash
-pip install sentence-transformers scikit-learn httpx snowballstemmer unidecode pyyaml tabulate
-export EVAL_ENV_FILE=/path/outside/repo/.env    # OPENROUTER_API_KEY=... (Jev and LLM judges via OpenRouter)
-
-python -m elastic_evals calibrate --suite examples/banking_suite.yaml --data labelled.jsonl --out calib/
-python -m elastic_evals report    --calib calib/
-python -m elastic_evals run       --suite examples/banking_suite.yaml --calib calib/ --data conversations.jsonl --out scores.jsonl
+docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml logs setup        # prints an admin API key for tenant "demo"
 ```
 
-Add `--local-only` to `calibrate` to forbid hosted models. The report then tells you which checks cannot reach the target without them.
+- Agents send OTLP to `localhost:4317` (gRPC) or `localhost:4318` (HTTP), with resource attribute `ee.tenant_id`.
+- UI and API at http://localhost:8000; paste the API key under Settings.
+- Hosted evaluators read `OPENROUTER_API_KEY` from `deploy/.env`. Without it, use local-only suites.
+- Behind a TLS-intercepting proxy, build with `--secret id=extra_ca,src=/path/ca.crt`.
+
+Register a suite, calibrate it and start scoring. Run the CLI inside the stack so calibration artifacts land
+in the volume the workers read:
+
+```bash
+ee() { docker compose -f deploy/docker-compose.yml run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work api "$@"; }
+ee suite --tenant demo --id banking --file examples/banking_suite.yaml --agent bank-assistant
+ee calibrate --suite examples/banking_suite.yaml --data labelled.jsonl --out calib/      # --local-only without a key
+ee register --tenant demo --suite banking --calib calib/      # prints the calibration id (status: candidate)
+ee promote <calibration id>                                  # or `ee shadow <id>` first
+ee replay --data experiments/data/synthetic_c.jsonl --tenant demo --endpoint http://gateway:4318   # demo traffic
+```
+
+Kubernetes: `deploy/helm/elastic-evals` (external OpenSearch, Kafka and Postgres; set `tenancy.dedicatedPools` for regulated tenants).
+
+## The engine without any services
+
+```bash
+pip install -e ".[local]"
+export EVAL_ENV_FILE=/path/outside/repo/.env    # OPENROUTER_API_KEY=... for Jev and LLM judges
+
+python -m elastic_evals calibrate --suite examples/banking_suite.yaml --data labelled.jsonl --out calib/   # --local-only
+python -m elastic_evals report    --calib calib/
+python -m elastic_evals run       --suite examples/banking_suite.yaml --calib calib/ --data convs.jsonl --out scores.jsonl
+python -m elastic_evals synth     --spec examples/banking_synth.yaml --n 50 --out synth.jsonl
+python -m elastic_evals calibrate ... --pool unlabelled.jsonl --teacher llm_haiku        # distillation
+python -m elastic_evals experiment --suite S --calib calib/ --items items.jsonl --agent my_pkg.agent:run --report run.json
+```
 
 Conversations are JSONL:
 
@@ -69,4 +111,39 @@ Conversations are JSONL:
 {"id": "...", "lang": "es", "turns": [{"role": "user", "text": "..."}, {"role": "tool", "name": "...", "args": {}, "result": "..."}, {"role": "assistant", "text": "..."}], "record": {"status": "pending", "fee": 0}}
 ```
 
-Calibration data also carries `"labels": {"question": 0|1}`. Scores come out as one JSON record per question, giving the value, the probability, the evaluator and its tier, and the sample reason (`route`, `shadow` or `random_audit`).
+Calibration data adds `"labels": {"check": 0|1|"class"}`.
+
+### In your test suite
+
+```ini
+# pytest.ini
+[pytest]
+ee_suite = examples/banking_suite.yaml
+ee_calibration = calib/
+```
+
+```python
+def test_transfer(ee):
+    conv = run_my_agent("send 100 to Ana")
+    ee.check(conv, expect={"fee_mismatch": 0})   # fails on any flagged critical check
+```
+
+Use `--ee-baseline run.json` and `--ee-report run.json` for relative gates in CI.
+
+### In your agent (Sentry)
+
+```python
+import sentry_sdk
+from elastic_evals.sentry import before_send
+sentry_sdk.init(dsn=..., before_send=before_send(ui_url="https://evals.example.com"), send_default_pii=False)
+```
+
+## Development
+
+```bash
+python -m venv .venv && .venv/bin/pip install -e ".[all]"
+cd collector && go test ./... && builder --config builder-config.yaml   # OCB v0.163.0 -> _build/eecol
+cd ui && npm ci && npm run build
+pytest                     # integration tests skip when OpenSearch / Postgres / Kafka / eecol are absent
+cd ui && EE_UI_URL=http://localhost:8000 npx playwright test           # against a running, seeded API
+```

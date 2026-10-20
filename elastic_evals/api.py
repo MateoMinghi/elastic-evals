@@ -285,7 +285,7 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
         try:
             version = reg.put_suite(c.tenant, suite_id, yaml, agent_name)
         except (ValueError, TypeError, KeyError) as exc:
-            raise HTTPException(422, f"invalid suite: {exc}")
+            raise HTTPException(422, f"invalid suite: {exc}") from exc
         pg.audit(c.actor, "suite.put", f"{suite_id}@{version}", c.tenant)
         return {"id": suite_id, "version": version}
 
@@ -415,7 +415,7 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
         try:
             annotation.submit(pg, os_, reg, qid, cid, labels, c.actor, lang)
         except ValueError as exc:
-            raise HTTPException(422, str(exc))
+            raise HTTPException(422, str(exc)) from exc
         return {"ok": True}
 
     @app.post("/v1/annotation-queues/{qid}/items/{cid}/skip")
@@ -535,10 +535,6 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
             return FileResponse(f if path and f.is_file() else ui / "index.html")
 
     return app
-
-
-def _lazy_app():
-    return create_app()
 
 
 class _Lazy:

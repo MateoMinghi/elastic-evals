@@ -230,7 +230,7 @@ def _signed(body: dict):
 
 
 def test_sentry_webhooks(deployment):
-    c, fake, pg = deployment["client"], deployment["fake"], deployment["pg"]
+    c, fake = deployment["client"], deployment["fake"]
     cid = deployment["convs"][1]["id"]
     detail = c.get(f"/v1/conversations/{cid}", headers=deployment["keys"]["viewer"]).json()
     trace = detail["rollup"]["trace_ids"][0]
