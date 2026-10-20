@@ -190,16 +190,25 @@ Built-in adapters, cheapest first:
 
 The rule: **store the raw output and the probabilities, never only the decision after the threshold.** Then thresholds can be changed later without running the evaluators again.
 
-### 7.3 The cascade
+### 7.3 The cascade: three automated layers, plus humans
 
 | Tier | Runs on | Purpose |
 |---|---|---|
-| 0: deterministic | 100% | Schema and tool-call validity, PII leaks, claimed success with no operation record behind it, critical fields checked against records, lexical rules, behavioural signals. **Critical metrics live here, never in a classifier.** |
-| 1: small classifiers | 100% (or a high fraction) | Self-hosted encoders first (embedding kNN, distilled heads, open guard models); Jev where the tenant allows hosted calls. Routing correctness, frustration, injection, groundedness, safety, topic. Thresholds set per evaluator and per slice for a target precision. |
-| 2: LLM judge | Uncertain band of tier 1, plus a random audit slice | A judge from a *different model family* than the agent and than any runtime classifier making the same decision (no correlated judging). Has a cost cap per rule. |
-| 3: human | Stratified sample, plus every tier-1/tier-2 disagreement | Annotation queues fill automatically from score conditions. Human labels are the ground truth for calibration. |
+| 0: rules (lexical + deterministic) | 100% | Schema and tool-call validity, PII leaks, claimed success with no operation record behind it, critical fields checked against records, lexical rules, behavioural signals. **Critical metrics live here, never in a classifier.** |
+| 1: classifiers | 100% (or a high fraction) | Self-hosted encoders first (embedding kNN, distilled heads, open guard models); Jev where the tenant allows hosted calls. Routing correctness, frustration, injection, groundedness, safety, topic. Thresholds set per evaluator and per slice for a target precision. |
+| 2: LLM judge | Uncertain band of tier 1, items tier 0 flags as suspicious, plus a random audit slice | A judge from a *different model family* than the agent and than any runtime classifier making the same decision (no correlated judging). Has a cost cap per rule. |
+| 3: human (calibration, not a review step) | Stratified sample, plus every tier-1/tier-2 disagreement | Annotation queues fill automatically from score conditions. Human labels are the ground truth that measures and trains tiers 0–2. |
 
-Cascade rules are ordinary eval rules with a trigger on another evaluator's score, for example `when jev-routing.confidence < 0.7 or sample(2%) → judge-routing`.
+The cascade follows three principles:
+
+1. **Each eval question starts at the cheapest tier that is accurate enough for it.** Its calibration report (§7.6) decides which tier that is. Not every question passes through every tier:
+   - "Was the disclosure said?" → tier 0 only.
+   - "Is the user frustrated?" → tier 1, escalating to the judge when unsure.
+   - "Was the answer helpful?" → tier 2 on a sample, until a distilled tier-1 head is good enough (§7.5).
+2. **Escalation, not repetition.** A higher tier sees an item only when a lower tier is unsure, flags something suspicious, or the item falls in the random audit slice. Cost tracks uncertainty, not traffic.
+3. **Higher tiers never overrule tier 0 on critical checks.** A failed record check stays a failure, whatever a classifier or judge says. Classifiers and judges may add a flag. They may never clear one.
+
+Cascade rules are ordinary eval rules with a trigger on another evaluator's score, for example `when routing-clf.confidence < 0.7 or sample(2%) → judge-routing`.
 
 **How sampling works:** deterministic, using a hash of the span ID against the rule's rate, as Langfuse does. Every span is either always in or always out, so results are reproducible.
 
