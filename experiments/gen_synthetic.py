@@ -239,14 +239,18 @@ async def main():
 
     async def one(spec, prompt):
         for attempt in range(3):
+            extra = {"reasoning": {"enabled": False}} if VARIANT == "c" else {}  # Qwen reasons by default and times out
             try:
                 res = await client.chat(
                     GENERATOR, [{"role": "user", "content": prompt}], tag="generate",
                     temperature=1.0, max_tokens=3500 if VARIANT in ("b", "c") else 2500, response_format={"type": "json_object"},
-                    seed=attempt,
+                    seed=attempt, **extra,
                 )
             except CacheMiss:
                 return None
+            except RuntimeError as err:  # one failed item must not sink the batch
+                print(f"{spec['id']}: {err}", file=sys.stderr)
+                continue
             text = (res["choices"][0]["message"]["content"] or "").strip()
             text = text[text.find("{"): text.rfind("}") + 1]
             try:
