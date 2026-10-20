@@ -6,7 +6,6 @@ The final enabled layer always decides. lo/hi/tau are tuned on the DEV split onl
 largest coverage whose dev accuracy on confident items is >= TARGET. Metrics are on TEST.
 """
 
-import itertools
 import json
 import sys
 from collections import defaultdict
@@ -18,7 +17,7 @@ from sklearn.metrics import accuracy_score, cohen_kappa_score, f1_score
 from tabulate import tabulate
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_layers import DATA, PREDS, load, synthetic_items  # noqa: E402
+from run_layers import PREDS, load, synthetic_items  # noqa: E402
 
 RESULTS = Path(__file__).resolve().parent / "results"
 TARGET = 0.95

@@ -187,14 +187,43 @@ def embed(texts):
     return vecs, (time.perf_counter() - t0) / max(1, len(texts))
 
 
-def logreg_fit_predict(train_x, train_y, test_x, classes=None):
+def logreg_fit_predict(train_x, train_y, test_x):
     from sklearn.linear_model import LogisticRegression
     clf = LogisticRegression(max_iter=2000, class_weight="balanced", C=4.0)
     clf.fit(train_x, train_y)
     return clf.predict_proba(test_x), list(clf.classes_)
 
 
+def logreg_with_oof(xs, dev_idx, dev_y):
+    """Fit on dev and predict everything, but give dev items out-of-fold predictions,
+    so thresholds tuned on dev are not tuned on the classifier's own training data."""
+    from sklearn.model_selection import StratifiedKFold
+    proba, classes = logreg_fit_predict(xs[dev_idx], dev_y, xs)
+    dev_y = np.array(dev_y)
+    folds = min(5, min(np.unique(dev_y, return_counts=True)[1]))
+    for tr, va in StratifiedKFold(folds, shuffle=True, random_state=0).split(dev_idx, dev_y):
+        p, c = logreg_fit_predict(xs[[dev_idx[i] for i in tr]], dev_y[tr], xs[[dev_idx[i] for i in va]])
+        for row, i in zip(p, va):
+            full = np.zeros(len(classes))
+            for k, cls in enumerate(c):
+                full[classes.index(cls)] = row[k]
+            proba[dev_idx[i]] = full
+    return proba, classes
+
+
 def nli_zeroshot(texts, hypotheses, multi_label=False):
+    import hashlib
+    key = hashlib.sha256(json.dumps([texts, hypotheses, multi_label]).encode()).hexdigest()[:16]
+    path = PREDS / f".nli-{key}.json"
+    if path.exists():
+        return json.loads(path.read_text())
+    res = _nli_zeroshot(texts, hypotheses, multi_label)
+    PREDS.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(res))
+    return res
+
+
+def _nli_zeroshot(texts, hypotheses, multi_label=False):
     from transformers import pipeline
     if "nli" not in _models:
         _models["nli"] = pipeline("zero-shot-classification", model=NLI, device=-1)
@@ -209,8 +238,8 @@ def local_synthetic(items, out):
     for q in SYN_QUESTIONS:
         xs, per_item = embed([syn_view(it, q) for it in items])
         dev_idx = [i for i, it in enumerate(items) if it["split"] == "dev"]
-        y = np.array([it["labels"][q] for it in dev])
-        proba, classes = logreg_fit_predict(xs[dev_idx], y, xs)
+        y = [it["labels"][q] for it in dev]
+        proba, classes = logreg_with_oof(xs, dev_idx, y)
         pos = classes.index(1)
         for it, pr in zip(items, proba):
             out.add(it, q, "e5_logreg", float(pr[pos]), per_item)
@@ -227,7 +256,7 @@ def local_choice(items, out, task, labels, hypothesis):
         xs, per_item = embed([it["text"] for it in sub])
         dev_idx = [i for i, it in enumerate(sub) if it["split"] == "dev"]
         pool_idx = [i for i, it in enumerate(sub) if it["split"] == "pool"]
-        proba, classes = logreg_fit_predict(xs[dev_idx], [sub[i]["label"] for i in dev_idx], xs)
+        proba, classes = logreg_with_oof(xs, dev_idx, [sub[i]["label"] for i in dev_idx])
         for it, pr in zip(sub, proba):
             if it["split"] != "pool":
                 out.add(it, task, "e5_logreg", dict(zip(classes, map(float, pr))), per_item)
@@ -248,7 +277,7 @@ def local_choice(items, out, task, labels, hypothesis):
 def local_injection(items, out):
     xs, per_item = embed([it["text"] for it in items])
     dev_idx = [i for i, it in enumerate(items) if it["split"] == "dev"]
-    proba, classes = logreg_fit_predict(xs[dev_idx], [it["label"] for it in items if it["split"] == "dev"], xs)
+    proba, classes = logreg_with_oof(xs, dev_idx, [it["label"] for it in items if it["split"] == "dev"])
     pos = classes.index("1")
     for it, pr in zip(items, proba):
         out.add(it, "injection", "e5_logreg", float(pr[pos]), per_item)
