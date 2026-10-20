@@ -129,11 +129,17 @@ def chains(evaluators, question):
                     yield chain
 
 
+def _th(thresholds, cid):
+    """Thresholds for one conversation: a dict, or (cross-fitting) a function of the conversation."""
+    return thresholds(cid) if callable(thresholds) else thresholds
+
+
 def walk(chain, q, cid, preds, thresholds):
     """Evaluators a question visits on one conversation, and the decision it ends with."""
+    th = _th(thresholds, cid)
     for k, ev in enumerate(chain):
         p = preds[ev.id].get((cid, q.name))
-        if k == len(chain) - 1 or confident(p, thresholds[q.name][ev.id]):
+        if k == len(chain) - 1 or confident(p, th[q.name][ev.id]):
             return chain[: k + 1], final(p, q)
     return chain, fallback(q)
 
@@ -157,11 +163,12 @@ def simulate(chain, q, convs, labels, preds, cost, lat, thresholds):
     correct, spend, latency, decided_by, by_lang = [], [], [], defaultdict(int), defaultdict(list)
     for c in convs:
         cid, cs, lt = c["id"], 0.0, 0.0
+        th = _th(thresholds, cid)
         for k, ev in enumerate(chain):
             p = preds[ev.id].get((cid, q.name))
             cs += cost[ev.id].get(cid, 0.0)
             lt += lat[ev.id].get(cid, 0.0)
-            if k == len(chain) - 1 or confident(p, thresholds[q.name][ev.id]):
+            if k == len(chain) - 1 or confident(p, th[q.name][ev.id]):
                 if (cid, q.name) in labels:
                     ok = final(p, q) == labels[(cid, q.name)]
                     correct.append(ok)
@@ -220,14 +227,27 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
     # thresholds per strictness level: a chain may require its cheap layers to be more accurate
     # than the policy target when the question's floor demands it
     levels = sorted({policy.target_accuracy, 0.97, 0.99, 1.0} - {x for x in (0.97, 0.99) if x < policy.target_accuracy})
-    by_level = {lv: {q.name: {} for q in questions} for lv in levels}
-    for q in questions:
-        for ev in evaluators:
-            pairs = [(preds[ev.id].get((c["id"], q.name)), labels[(c["id"], q.name)]) for c in convs
-                     if (c["id"], q.name) in labels]
-            pairs = [(p, y) for p, y in pairs if p is not None]
-            for lv in levels:
-                by_level[lv][q.name][ev.id] = tune_threshold(*zip(*pairs), lv, q.multiclass) if pairs else None
+    def tune(subset):
+        out = {lv: {q.name: {} for q in questions} for lv in levels}
+        for q in questions:
+            for ev in evaluators:
+                pairs = [(preds[ev.id].get((c["id"], q.name)), labels[(c["id"], q.name)]) for c in subset
+                         if (c["id"], q.name) in labels]
+                pairs = [(p, y) for p, y in pairs if p is not None]
+                for lv in levels:
+                    out[lv][q.name][ev.id] = tune_threshold(*zip(*pairs), lv, q.multiclass) if pairs else None
+        return out
+
+    by_level = tune(convs)  # what the runtime uses
+    # what routes are judged by: with cross-fitting, each conversation is decided with thresholds
+    # tuned on the other folds, so a route's accuracy is not flattered by thresholds fitted to it
+    folds = policy.crossfit_folds if policy.crossfit_folds and len(convs) >= 2 * policy.crossfit_folds else 0
+    if folds:
+        fold = {c["id"]: int(hashlib.sha256(c["id"].encode()).hexdigest()[:8], 16) % folds for c in convs}
+        per_fold = [tune([c for c in convs if fold[c["id"]] != k]) for k in range(folds)]
+        judge_th = {lv: (lambda lv: lambda cid: per_fold[fold[cid]][lv])(lv) for lv in levels}
+    else:
+        judge_th = by_level
 
     # 1. every chain per question, and each question's floors (overall and per required language)
     rows, floors, lang_floors = {}, {}, {}
@@ -236,7 +256,7 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
         rows[q.name] = []
         for ch in chains(usable, q):
             for lv in (levels if len(ch) > 1 else levels[:1]):
-                r = simulate(ch, q, convs, labels, preds, cost, lat, by_level[lv])
+                r = simulate(ch, q, convs, labels, preds, cost, lat, judge_th[lv])
                 rows[q.name].append((ch, dict(r, strictness=lv)))
         if not rows[q.name]:
             raise ValueError(f"no evaluator can answer question {q.name!r}")
@@ -275,7 +295,8 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
         if len(routes) < len(questions):
             continue
         th = {q: by_level[levels_used[q]][q] for q in routes}
-        acc, usd, ms = simulate_suite(routes, questions, convs, labels, preds, cost, lat, th)
+        judged = (lambda lu: lambda cid: {q: judge_th[lu[q]](cid)[q] for q in lu})(dict(levels_used)) if folds else th
+        acc, usd, ms = simulate_suite(routes, questions, convs, labels, preds, cost, lat, judged)
         c = {"hosted": sorted(hosted), "short": len(short), "below_floor": short, "usd_per_conv": usd,
              "ms_per_conv": ms, "accuracy": acc, "strictness": dict(levels_used), "thresholds": th,
              "routes": {q: [e.id for e in ch] for q, ch in routes.items()}}
@@ -332,6 +353,7 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
         "criteria_versions": {q.name: q.criteria_version for q in questions},
         "policy": vars(policy),
         "n_labelled": len(convs),
+        "crossfit_folds": folds,
         "n_distilled": len(extra[0]) if extra else 0,
         "languages": sorted({c.get("lang", "und") for c in convs}),
         "evaluator_versions": {e.id: e.version for e in evaluators},
@@ -350,7 +372,8 @@ def _empty_calibration(suite, convs):
     created = dt.datetime.now(dt.timezone.utc)
     return {"id": _calibration_id(suite, convs, created), "created_at": created.isoformat(), "status": "candidate",
             "suite": suite.name, "suite_version": suite.version, "criteria_versions": {}, "policy": vars(suite.policy),
-            "n_labelled": len(convs), "languages": [], "evaluator_versions": {}, "routes": {}, "thresholds": {},
+            "n_labelled": len(convs),
+        "crossfit_folds": 0, "languages": [], "evaluator_versions": {}, "routes": {}, "thresholds": {},
             "suite_choice": {"hosted": [], "short": 0, "below_floor": [], "usd_per_conv": 0.0, "ms_per_conv": 0.0,
                              "accuracy": {}, "strictness": {}, "budget_overrun": 0.0},
             "budget_met": True, "audit_agreement": {}, "configs": [], "report": {}}

@@ -210,12 +210,12 @@ On C, the bootstrap 95% intervals show the engine is statistically tied with eve
 | Distillation (LLM labels → small heads) | **Kept; in engine v1.1** | L9 |
 | Random audit sample | **Kept, now the drift monitor** | L7 |
 | Cost as the headline argument | **Demoted** | L10 |
-| Eval-aware retention | **Kept, untested** | Follows from tiers 0 and 1 running on 100% before the retention decision |
-| Trace-complete signal and trajectory evaluations | **Kept, untested** | Langfuse dropped trace-level evaluation; a gap we fill |
+| Eval-aware retention | **Kept, built and tested** (v0.2) | Content is staged, evaluated, then kept or left to expire (§5.2, §14) |
+| Trace-complete signal and trajectory evaluations | **Kept, built and tested** (v0.2) | Langfuse dropped trace-level evaluation; a gap we fill (`scope: trajectory` and `scope: observation`) |
 | OpenSearch as the event store | **Kept, decided; needs a load test** | §5, §12 |
 | Elasticsearch | **Dropped** | Licensing; one backend |
 | Langfuse concepts (§2.1) | **Kept** | Proven at scale; MIT |
-| Sentry integration | **Kept, narrow; untested** | §8 |
+| Sentry integration | **Kept, narrow; built**, tested with the real SDK and a fake Sentry API (v0.2) | §8; a live installation is the phase-5 gate |
 | OTel `gen_ai.evaluation.result` event for scores | **Changed** | Sentry drops span events on OTLP, and the event lacks evaluator kind and version. Scores are documents; we can still *export* the event |
 | Synthetic labelled test sets | **New** | L13 |
 | Prompt management / playground | **Non-goal** | Others do it well |
@@ -518,7 +518,7 @@ The retention decision is taken **after** the engine runs. Evaluators see all co
 
 ## 8. Sentry integration
 
-Based on [`research/sentry.md`](research/sentry.md). Not yet tested in practice.
+Based on [`research/sentry.md`](research/sentry.md). Built in v0.2 (`elastic_evals/sentry.py`) and tested with the real Sentry SDK against a local ingest endpoint and a fake Sentry API; not yet against a live installation.
 
 - **Division of work:** Sentry handles exceptions, alerting and the issue workflow. elastic-evals handles traces, content, scores and evaluation. They share **one W3C trace id** (Sentry trace ids are the same 32-hex value as OTel's).
 - **Propagation:** the Sentry SDK's `OTLPIntegration` puts the active OTel trace and span ids on every Sentry event.
@@ -610,11 +610,11 @@ Each phase ends with a measurable gate.
 | Phase | Scope | Exit gate | Status (v0.2) |
 |---|---|---|---|
 | **0. Done** | Research; layer experiments; `elastic_evals` engine (suites, calibration, per-conversation runtime, audit/drift, local-only, CLI); synthetic sets A/B/C | On holdout C: matches the best single judge at lower cost and latency (✓) | ✓ |
-| **1. Real-traffic validation** | Collect ~200 real, anonymised agent conversations; label them through a simple annotation CLI; calibrate; add `max_ms_per_conv`; multi-class checks; per-language reporting | Engine within 1 SE of the best judge per check on real labels, or a documented reason per check | Tooling ✓ (annotation CLI and UI, budgets, multi-class, language floors). **Gate open: needs real conversations** |
-| **2. Storage path + load test** | Collector config, Kafka, ingest workers, OpenSearch templates and ISM, Postgres schema, trace-complete tracker, `traces-*` rollups; replay synthetic traces at 2–3× target peak | Ingest latency, GB per million spans and dashboard times within budget, or switch the analytics sink | Built ✓; single-node load test ✓ ([LOAD.md](../experiments/results/LOAD.md)). **Gate open: needs a target peak and a real cluster** |
+| **1. Real-traffic validation** | Collect ~200 real, anonymised agent conversations; label them through a simple annotation CLI; calibrate; add `max_ms_per_conv`; multi-class checks; per-language reporting | Engine within 1 SE of the best judge per check on real labels, or a documented reason per check | Tooling ✓ (annotation CLI and UI, budgets, multi-class, language floors, `gate` command; on the synthetic holdout see [GATE_PHASE1.md](../experiments/results/GATE_PHASE1.md)). **Gate open: needs real conversations** |
+| **2. Storage path + load test** | Collector config, Kafka, ingest workers, OpenSearch templates and ISM, Postgres schema, trace-complete tracker, `traces-*` rollups; replay synthetic traces at 2–3× target peak | Ingest latency, GB per million spans and dashboard times within budget, or switch the analytics sink | Built ✓; single-node load test ✓ ([LOAD.md](../experiments/results/LOAD.md)); 3-node failover and rollover ✓ ([CLUSTER.md](../experiments/results/CLUSTER.md)). **Gate open: needs a target peak and a production-sized cluster** |
 | **3. Engine as a service** | Evaluation workers on the stream; scores into `scores-*`; calibration lifecycle (candidate → shadow → active); drift alerts; eval-aware retention | Drift detection and recalibration work end to end on replayed traffic | ✓ The holdout replayed through the full path reproduces the engine exactly ([PIPELINE.md](../experiments/results/PIPELINE.md)); drift alerts, shadow comparison and promotion tested |
 | **4. Humans and offline** | Annotation queues with automatic filling; distillation loop; datasets and experiments; pytest plugin and CI gates; `synth` | A distilled head replaces judge calls on at least one check without breaching its floor | ✓ Frustration's route dropped the judge (e5 → Jev) and improved; −44% LLM calls overall ([DISTILL.md](../experiments/results/DISTILL.md)) |
-| **5. Sentry bridge** | Propagation guide; `before_send` helper; webhook bridge; External Issue links; quality-regression events | Click-through both ways on a demo; self-hosted proof of concept | Built and tested against a fake Sentry API. **Gate open: needs a Sentry installation** |
+| **5. Sentry bridge** | Propagation guide; `before_send` helper; webhook bridge; External Issue links; quality-regression events | Click-through both ways on a demo; self-hosted proof of concept | Built; tested against a fake Sentry API and with the real Sentry SDK. **Gate open: needs a Sentry installation** |
 | **6. UI and governance** | The 5 screens; two-tier tenancy; audit log; Helm chart | First external tenant | Built ✓ (UI with Playwright tests, dedicated and pooled tenants, scoped API keys, audit log, compose and Helm). **Gate open: first tenant** |
 
 ---
@@ -638,16 +638,19 @@ Each phase ends with a measurable gate.
 
 ## 14. Implementation status (v0.2)
 
-Everything in §4–§11 exists and is tested, except where marked. Tests: `pytest` (33, offline and against real OpenSearch 3.9, Postgres 16, Kafka 4.1 and the built collector), `go test ./...` in `collector/`, Playwright in `ui/`.
+Everything in §4–§11 exists and is tested. Tests: `pytest` (44: offline, and against real OpenSearch 3.9, OpenSearch Dashboards 3.9, Postgres 16, Kafka 4.1, the Presidio analyzer, an S3-compatible server, the real Sentry SDK and the built collector), `go test ./...` in `collector/`, Playwright in `ui/`; CI on every push.
 
 | Component | Where | Notes |
 |---|---|---|
-| Collector processor: tenant tagging, semconv normaliser (OpenInference, OpenLLMetry, Langfuse, legacy gen_ai), internal environments, content dropping | `collector/processor/eeprocessor` | Priority-ordered; never overwrites native `gen_ai.*`; source recorded in `ee.semconv.source` |
-| Collector exporter: `obs` + `stage` documents, pricing, pools, idempotent bulk | `collector/exporter/eeopensearchexporter` | 409 = already written; 429/5xx retry the batch; mapping errors dropped and logged |
+| Collector processor: tenant tagging, semconv normaliser (OpenInference, OpenLLMetry, Langfuse, legacy gen_ai), internal environments, content dropping, **Presidio redaction** | `collector/processor/eeprocessor` | Priority-ordered; never overwrites native `gen_ai.*`; entities replaced in place (code-point offsets, JSON kept valid), language from the trace; analyzer failure drops content |
+| Presidio analyzer service | `elastic_evals/presidio_service.py` | Presidio's REST contract, spaCy en + es; the official image works too |
+| Collector exporter: `obs` + `stage` documents, pricing, pools, idempotent bulk, **S3 offload** | `collector/exporter/eeopensearchexporter` | 409 = already written; 429/5xx retry the batch; mapping errors dropped and logged; prices file hot-reloaded; content above a threshold goes to S3 (`blob_uri`), read back by the worker |
+| Re-pricing | `pricing.py`, `reprice` command, `/v1/reprice` | Same rules as the collector (parity test); rewrites rollup costs from stored usage |
 | Collector distribution | `collector/builder-config.yaml` (OCB v0.163.0) | OTLP, Kafka, batch, memory limiter, redaction, transform, tail sampling, load balancing |
 | OpenSearch layout | `elastic_evals/store/schema/*.json` | Component + index templates per pool, ISM hot → warm → delete, write aliases, `zstd`, `flat_object`, on-disk k-NN, star-tree metrics |
 | Postgres schema | `elastic_evals/store/schema/001_init.sql` | §5.4 plus `drift_alerts` |
 | Engine | `calibrate.py`, `engine.py`, `evaluators.py` | Budgets, language floors, multi-class checks, partial labels, evaluator registry, self-hosted judges, §6.6 records |
+| Trajectory and observation checks | `trajectory.py` | `scope: trajectory` (step budget, tool errors, forbidden tools, expected sequence; judges see the trajectory) and `scope: observation` (selected steps calibrated and routed like conversations; scores carry `observation_id`) |
 | Tracker, worker, retention | `tracker.py`, `worker.py`, `conversation.py` | Trace-complete signal, session attribution, ingest-lag retries, eval-aware retention |
 | Calibration lifecycle, drift, shadow comparison | `registry.py`, `drift.py` | Tenant local-only policy enforced at promotion and at load |
 | Labels, annotation queues, agreement | `annotation.py` | Fill rules: audit disagreement, tier disagreement, low confidence, stratified |
@@ -655,9 +658,11 @@ Everything in §4–§11 exists and is tested, except where marked. Tests: `pyte
 | Synthetic sets, distillation | `synth.py`, `distill.py` | |
 | API, Sentry bridge | `api.py`, `sentry.py` | Scoped API keys per tenant; audit log; HMAC webhooks |
 | UI | `ui/` | The five screens of §10 |
+| OpenSearch Dashboards saved objects | `dashboards.py`, `setup --dashboards` | Index patterns (with field lists), seven visualizations, an overview dashboard |
+| Gates | `gates.py`, `gate` command; `experiments/cluster_test.py` | Phase-1 gate by cross-validation; multi-node failover and rollover |
 | Deployment | `Dockerfile`, `collector/Dockerfile`, `deploy/docker-compose.yml`, `deploy/helm/` | |
 
-**Not built yet:** a Presidio-backed redaction processor (the stock `redaction` processor runs instead), S3 blob offload for very large payloads, OpenSearch Dashboards saved objects, the `gen_ai.evaluation.result` export, observation-level and trajectory checks in the engine (the experiment assertions cover trajectories offline), a re-pricing job.
+**Not built:** nothing in the design. What remains are the gates that need things outside a container: real human-labelled traffic (phase 1; the `gate` command runs as soon as it exists), a production-sized cluster and a target peak (phase 2), a live Sentry installation (phase 5) and a first external tenant (phase 6).
 
 **Lessons from building it:**
 
@@ -670,6 +675,9 @@ Everything in §4–§11 exists and is tested, except where marked. Tests: `pyte
 | L19 | The production path reproduces the offline engine exactly (93.5% on the holdout, check by check) | The engine can be calibrated and evaluated offline with confidence |
 | L20 | Distillation pays: 93.9% (against 93.5%), $53 against $83 per 1M conversations, 20% against 36% sent to an LLM | Distillation is worth making routine (§6.8) |
 | L21 | With synthetic, problem-rich traffic, eval-aware retention kept 93% of conversations | Real traffic is mostly clean, so expect a much lower keep rate; measure it in phase 1 |
+| L23 | The Presidio service loaded its NLP models on the first request, past the gateway's 5 s timeout; the gateway, failing closed, dropped the content instead of forwarding it | Load models before reporting healthy; failing closed is the right default |
+| L24 | Imported Dashboards index patterns have no field list, so every visualization failed to render ("could not locate field") while the import reported success | Fill the field lists after import; check visualizations by rendering them |
+| L25 | On a 3-node cluster with one replica, killing a node mid-ingest lost no span (38,181 sent, 38,181 indexed); ISM rolled the write alias over and the cluster returned to green ([CLUSTER.md](../experiments/results/CLUSTER.md)) | Idempotent writes plus Kafka-held offsets make node loss a non-event for ingest |
 | L22 | One shared 4-core VM ingested 3,400 spans/s end to end and stored `obs` at about 320 MB per million spans (`zstd`, after merge); list views answered in 25–35 ms at p50, full-text search in about 240 ms; local-only evaluation ran at 16 conversations/s ([LOAD.md](../experiments/results/LOAD.md)) | At a billion spans a month that is about 320 GB of `obs` before replicas, before retention. Full-text search is the slow query (it resolves content hits to conversations in two steps): index the first user message and flags on `traces-*` for common searches. Local heads are the evaluation bottleneck on CPU: serve them with ONNX Runtime or TEI (§11) |
 
 ---
@@ -681,6 +689,8 @@ Everything in §4–§11 exists and is tested, except where marked. Tests: `pyte
 - Production path: [`PIPELINE.md`](../experiments/results/PIPELINE.md) (`experiments/e2e_pipeline.py`)
 - Distillation: [`DISTILL.md`](../experiments/results/DISTILL.md) (`experiments/distill_experiment.py`)
 - Load test: [`LOAD.md`](../experiments/results/LOAD.md) (`experiments/load_test.py`)
+- Multi-node cluster: [`CLUSTER.md`](../experiments/results/CLUSTER.md) (`experiments/cluster_test.py`)
+- Phase-1 gate on the synthetic holdout: [`GATE_PHASE1.md`](../experiments/results/GATE_PHASE1.md) (`python -m elastic_evals gate`)
 - Code:
   - `elastic_evals/`: the engine
   - `experiments/`: generators, runners, analysis

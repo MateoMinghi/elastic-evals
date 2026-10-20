@@ -22,7 +22,7 @@ from .providers import OpenRouter
 from .suite import Suite
 from .views import text_of, view
 
-RANK = {"rules": 0, "local_head": 1, "jev": 2, "llm": 3}
+RANK = {"rules": 0, "local_head": 1, "hf_classifier": 1, "hf_zero_shot": 1, "jev": 2, "llm": 3}
 
 
 class Evaluator:
@@ -207,6 +207,51 @@ class LLMJudgeEvaluator(Evaluator):
         return out, float((res.get("usage") or {}).get("cost") or 0), float(res.get("_latency_s") or 0)
 
 
+class HFClassifierEvaluator(Evaluator):
+    """Any Hugging Face text classifier as a local evaluator (guard models, injection detectors, ...):
+
+        - id: injection_guard
+          type: hf_classifier
+          model: protectai/deberta-v3-base-prompt-injection-v2
+          questions: {prompt_injection: {view: user, positive: INJECTION}}
+
+    p = the probability of the `positive` label on the question's view (or on `view` per question).
+    Calibration decides whether it enters a route, like any other evaluator.
+    """
+
+    _pipes = {}
+
+    def _pipe(self):
+        key = (self.cfg["model"], self.type)
+        if key not in self._pipes:
+            from transformers import pipeline
+            task = "zero-shot-classification" if self.type == "hf_zero_shot" else "text-classification"
+            self._pipes[key] = pipeline(task, model=self.cfg["model"], device=-1, truncation=True)
+        return self._pipes[key]
+
+    @property
+    def version(self):
+        return self.cfg["model"]
+
+    def evaluate(self, conv, questions):
+        t0 = time.perf_counter()
+        out = {}
+        for q in questions:
+            spec = (self.cfg.get("questions") or {}).get(q.name)
+            if spec is None:
+                continue
+            text = view(conv, spec.get("view", q.view))[:4000]
+            if self.type == "hf_zero_shot":
+                hyp = spec["hypothesis"]
+                res = self._pipe()(text, candidate_labels=[hyp], hypothesis_template="{}", multi_label=True)
+                p = float(res["scores"][0])
+            else:
+                scores = {r["label"]: r["score"] for r in self._pipe()(text, top_k=None)}
+                p = float(scores.get(spec["positive"], 0.0))
+            out[q.name] = 1 - p if spec.get("invert") else p
+        return out, 0.0, time.perf_counter() - t0
+
+
 def resolve_rule(name: str):
     """A rule is a function in elastic_evals.rules, or any importable 'package.module:function'."""
     if ":" in name:
@@ -218,7 +263,8 @@ def resolve_rule(name: str):
     return getattr(trajectory, name)
 
 
-TYPES = {"rules": RulesEvaluator, "local_head": LocalHeadEvaluator, "jev": JevEvaluator, "llm": LLMJudgeEvaluator}
+TYPES = {"rules": RulesEvaluator, "local_head": LocalHeadEvaluator, "jev": JevEvaluator, "llm": LLMJudgeEvaluator,
+         "hf_classifier": HFClassifierEvaluator, "hf_zero_shot": HFClassifierEvaluator}
 
 
 def register(type_name: str, cls, tier: int):
