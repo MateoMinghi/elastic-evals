@@ -172,7 +172,7 @@ async def main():
     rng = random.Random(SEED)
     specs = [make_spec(rng, i) for i in range(N)]
     prompts = [build_prompt(s, random.Random(SEED + i)) for i, s in enumerate(specs)]
-    client = OpenRouter(concurrency=4)
+    client = OpenRouter(concurrency=8)
 
     async def one(spec, prompt):
         for attempt in range(3):
@@ -184,7 +184,7 @@ async def main():
                 )
             except CacheMiss:
                 return None
-            text = res["choices"][0]["message"]["content"].strip()
+            text = (res["choices"][0]["message"]["content"] or "").strip()
             text = text[text.find("{"): text.rfind("}") + 1]
             try:
                 turns = json.loads(text)["turns"]
