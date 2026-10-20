@@ -64,5 +64,6 @@ artifacts:
   uri: ""                   # s3://bucket/prefix; empty uses a shared PVC
   pvc: { size: 5Gi, storageClass: "" }
 setup:
+  dashboardsUrl: ""         # OpenSearch Dashboards: import the saved objects on every install/upgrade
   shards: 3
   replicas: 1

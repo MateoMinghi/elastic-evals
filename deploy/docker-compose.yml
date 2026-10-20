@@ -69,6 +69,15 @@ services:
       interval: 5s
       retries: 30
 
+  dashboards:   # OpenSearch Dashboards with our saved objects: docker compose --profile dashboards up -d
+    image: ${DASHBOARDS_IMAGE:-opensearchproject/opensearch-dashboards:3.9.0}
+    profiles: [dashboards]
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports: ["${EE_DASHBOARDS_PORT:-5601}:5601"]
+    depends_on: { opensearch: { condition: service_healthy } }
+
   setup:
     <<: *ee
     command: ["setup", "--tenant", "${EE_TENANT:-demo}", "--admin-key"]

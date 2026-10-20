@@ -8,7 +8,8 @@ Engine (no services needed):
   synth       --spec spec.yaml --n 50 --out synth.jsonl
 
 Services (OpenSearch, Postgres, Kafka; see deploy/):
-  setup       [--pools shared] [--tenant acme --dedicated] [--admin-key]   indices, templates, ISM, schema
+  setup       [--pools shared] [--tenant acme --dedicated] [--admin-key] [--dashboards URL]
+                                                                            indices, templates, ISM, schema, saved objects
   serve       [--port 8000]                                                 API + UI
   presidio    [--port 3000]                                                 PII analyzer for the gateway
   tracker     [--brokers localhost:9092] [--session-idle 300]               trace-complete signal
@@ -158,6 +159,10 @@ def cmd_setup(a):
         pools.add(reg.pool(a.tenant))
     os_.setup(pools=tuple(sorted(pools)), shards=a.shards, replicas=a.replicas)
     print(f"OpenSearch pools {sorted(pools)} and Postgres schema ready")
+    if a.dashboards:
+        from .dashboards import import_objects
+        res = import_objects(a.dashboards, os_.prefix)
+        print(f"OpenSearch Dashboards: {res['successCount']} saved objects imported")
     if a.admin_key and a.tenant:
         import secrets
         from .api import hash_secret
@@ -165,6 +170,11 @@ def cmd_setup(a):
         pg.exec("INSERT INTO api_keys (id, tenant_id, secret_hash, role_id) VALUES (%s, %s, %s, 'admin')",
                 key_id, a.tenant, hash_secret(secret))
         print(f"admin API key for {a.tenant}: {key_id}.{secret}")
+
+
+def cmd_dashboards(a):
+    from .dashboards import ndjson
+    Path(a.out).write_text(ndjson(a.prefix))
 
 
 def cmd_serve(a):
@@ -322,6 +332,11 @@ def main(argv=None):
     st.add_argument("--shards", type=int, default=1)
     st.add_argument("--replicas", type=int, default=0)
     st.add_argument("--admin-key", action="store_true")
+    st.add_argument("--dashboards", default=os.environ.get("EE_DASHBOARDS_URL"),
+                    help="OpenSearch Dashboards URL: import the saved objects")
+    db = sub.add_parser("dashboards", help="write the OpenSearch Dashboards saved objects as NDJSON")
+    db.add_argument("--out", required=True)
+    db.add_argument("--prefix", default=os.environ.get("EE_INDEX_PREFIX", "ee"))
     sv = sub.add_parser("serve")
     sv.add_argument("--host", default="0.0.0.0")
     sv.add_argument("--port", type=int, default=8000)
@@ -385,7 +400,8 @@ def main(argv=None):
                "setup": cmd_setup, "serve": cmd_serve, "presidio": cmd_presidio, "tracker": cmd_tracker, "worker": cmd_worker,
                "replay": cmd_replay, "suite": cmd_suite, "register": cmd_register, "shadow": cmd_lifecycle,
                "promote": cmd_lifecycle, "reject": cmd_lifecycle, "drift": cmd_drift, "annotate": cmd_annotate,
-               "reprice": cmd_reprice, "prices": cmd_prices}[args.cmd]
+               "reprice": cmd_reprice, "prices": cmd_prices,
+               "dashboards": cmd_dashboards}[args.cmd]
     return handler(args) or 0
 
 

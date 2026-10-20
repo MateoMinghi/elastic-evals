@@ -16,5 +16,6 @@ spec:
         - name: setup
           image: {{ include "ee.image" . }}
           args: ["setup", "--shards", "{{ .Values.setup.shards }}", "--replicas", "{{ .Values.setup.replicas }}",
-                 "--pools", "shared"{{ range $t, $p := .Values.tenancy.dedicatedPools }}, {{ $p | quote }}{{ end }}]
+                 "--pools", "shared"{{ range $t, $p := .Values.tenancy.dedicatedPools }}, {{ $p | quote }}{{ end }}
+                 {{- with .Values.setup.dashboardsUrl }}, "--dashboards", {{ . | quote }}{{ end }}]
           env: {{- include "ee.env" . | nindent 12 }}
