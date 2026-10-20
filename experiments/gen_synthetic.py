@@ -218,6 +218,20 @@ def render(turns: list) -> str:
     return "\n".join(out)
 
 
+def valid_turns(turns) -> bool:
+    """Reject malformed generations (seen with some models): every turn needs a role and its fields."""
+    if not isinstance(turns, list) or len(turns) < 3:
+        return False
+    for t in turns:
+        if not isinstance(t, dict) or t.get("role") not in ("user", "assistant", "tool"):
+            return False
+        if t["role"] == "tool" and not isinstance(t.get("name"), str):
+            return False
+        if t["role"] != "tool" and not isinstance(t.get("text"), str):
+            return False
+    return any(t["role"] == "assistant" for t in turns) and any(t["role"] == "user" for t in turns)
+
+
 def max_identical_run(turns: list) -> int:
     best, run, prev = 0, 0, None
     for t in turns:
@@ -255,9 +269,10 @@ async def main():
             text = text[text.find("{"): text.rfind("}") + 1]
             try:
                 turns = json.loads(text)["turns"]
-                break
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError, TypeError):
                 continue
+            if valid_turns(turns):
+                break
         else:
             return None
         labels = dict(spec["plant"])
