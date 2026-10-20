@@ -39,7 +39,7 @@ On a holdout from a model family never used in development, the engine:
 
 **Decided:**
 - OpenSearch (not Elasticsearch);
-- Python engine;
+- Go for the Collector and ingest pipeline, Python for the engine, API and SDK, TypeScript for the UI (§11);
 - engine first, then storage, then UI;
 - OpenTelemetry GenAI semantic conventions on the wire.
 
@@ -306,7 +306,7 @@ elastic-evals fills the gaps in §2.1:
 1. **Agents** use an `always_on` sampler. Every sampling decision is made downstream, where errors and scores are visible.
 2. **Collector tier 1** load-balances by `trace_id`. **Tier 2** runs redaction (a Presidio-backed processor), tenant tagging, the semconv normalizer and routing.
 3. **Kafka** buffers the stream, absorbs spikes, allows replay, and lets ingest and evaluation consume the same stream.
-4. **Ingest workers:**
+4. **Ingest workers** (a second Collector deployment in Go: a Kafka receiver plus our OpenSearch exporter, §11):
    - normalise attributes and compute cost from `model_prices` (with a re-pricing job);
    - write `obs` (truncated) and `payload` (full content) documents, with large blobs in S3;
    - update the trace-complete tracker.
@@ -576,8 +576,31 @@ The part Langfuse gives away for free, and the part we must build. Five screens;
 
 ## 11. Technology
 
-| Area | Pick | Notes |
+**Three languages, each where it is clearly the best fit: Go for the pipeline, Python for evaluation, TypeScript for the UI. No Rust for now.**
+
+| Component | Language / pick | Why |
 |---|---|---|
+| Collector distribution (receive, redact, tag tenant, normalise semconv, route to Kafka) | **Go**, built with the OpenTelemetry Collector Builder from `otelcol-contrib` plus our own processors | Collector components can only be written in Go; one static binary |
+| Ingest pipeline (Kafka → OpenSearch) | **Go**: a second Collector deployment, a Kafka receiver plus our own OpenSearch exporter (obs/payload split, truncation, deterministic ids, routing, pricing) | Same codebase and data model as the Collector; fast enough for the span transform; no separate worker service to build. The upstream `opensearchexporter` is alpha and doesn't match our index layout |
+| Evaluation engine, calibration, evaluation workers | **Python** (asyncio, Pydantic) | The ML ecosystem (sentence-transformers, scikit-learn, ONNX Runtime, LLM SDKs); the validated prototype; mostly waiting on hosted calls; scales out through Kafka consumer groups |
+| API | **Python** (FastAPI) | Shares models and calibration code with the engine |
+| CLI, SDK, pytest plugin | **Python** | Evaluator authors expect Python (DeepEval, Ragas, Inspect, pytest). Agents need no SDK from us: they emit OTel |
+| Embeddings and local heads at serving time | **Off the shelf**: Hugging Face `text-embeddings-inference` or ONNX Runtime | Fast serving without writing Rust ourselves |
+| Hosted evaluators | OpenRouter (chat + Decisions API) or direct provider APIs | Cached, budget-capped client; pinned model versions |
+| UI | **TypeScript** + React | Standard; the PayMe team already works in TypeScript |
+| Queue | Kafka (Redpanda for small installs) | |
+| Event store / config store / blobs | OpenSearch 3.x / Postgres / S3-compatible | §5.3, §5.4 |
+| Deployment | Docker Compose for development; Helm for production | |
+
+**Why not Rust.** Rust pays off when you build a storage or query engine; Laminar and Braintrust use it for that. OpenSearch does that job for us. Our own hot path is transforming spans in the ingest pipeline, which Go handles, and Rust cannot write Collector components. It is also the steepest learning curve for a Python and TypeScript team. If the phase-2 load test shows ingest CPU is the bottleneck, that one stateless exporter can be rewritten in Rust later.
+
+**Why not all-Go.** It would mean giving up the Python ML and evaluation ecosystem, and users want to write evaluators in Python.
+
+**Why not all-Python.** CPU cost at billions of spans, and Collector extensions must be Go anyway.
+
+**Fallback if the team wants to delay Go.** Run the stock Collector, write the ingest exporter in Python first, and move it to Go after the load test. Not recommended: the Collector customisation (tenant tagging, normaliser, index layout) needs Go from day one.
+
+---|---|---|
 | Engine, SDK, workers, API | Python (FastAPI, Pydantic) | The prototype is Python; the ML ecosystem; the PayMe engine is Python |
 | Local heads | sentence-transformers (multilingual-e5-small), scikit-learn; ONNX Runtime for serving | CPU; SetFit for few-shot refreshes |
 | Hosted evaluators | OpenRouter (chat + Decisions API) or direct provider APIs | Cached, budget-capped client; pinned model versions |
