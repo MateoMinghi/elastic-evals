@@ -8,6 +8,7 @@
       "timestamp": {"type": "date"},
       "tenant_id": {"type": "keyword"},
       "conversation_id": {"type": "keyword"},
+      "conversation_version": {"type": "keyword"},
       "trace_id": {"type": "keyword"},
       "observation_id": {"type": "keyword"},
       "session_id": {"type": "keyword"},

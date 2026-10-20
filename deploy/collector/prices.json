@@ -1,0 +1,5 @@
+[
+  {"model_pattern": "^(anthropic/)?claude-haiku-5\\.5", "start_date": "2026-01-01", "tiers": [{"above_input_tokens": 0, "input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write": 1.25}]},
+  {"model_pattern": "^(deepseek/)?deepseek-v4\\.1-flash", "start_date": "2026-01-01", "tiers": [{"above_input_tokens": 0, "input": 0.3, "output": 1.2, "cache_read": 0.03}]},
+  {"model_pattern": "^(openai/)?gpt-6-luna", "start_date": "2026-01-01", "tiers": [{"above_input_tokens": 0, "input": 0.2, "output": 0.8, "cache_read": 0.02}]}
+]

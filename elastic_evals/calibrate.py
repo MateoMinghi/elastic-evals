@@ -281,6 +281,27 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
             "meets_floor": q.name not in choice["below_floor"],
             "candidates": sorted((r for _, r in rows[q.name]), key=lambda r: -r["accuracy"])[:25]}
 
+    # baseline for the drift monitor: how often the chosen routes agree with the audit judge on the
+    # labelled set; live agreement on the audit sample is compared with this (DESIGN.md §6.7)
+    audit_agreement = {}
+    if policy.audit_judge and policy.audit_judge in preds:
+        auditor = next(e for e in evaluators if e.id == policy.audit_judge)
+        by_id = {e.id: e for e in evaluators}
+        for q in questions:
+            chain = [by_id[e] for e in routes[q.name]]
+            pairs = []
+            for c in convs:
+                pa = preds[auditor.id].get((c["id"], q.name))
+                if pa is None:
+                    continue
+                _, d = walk(chain, q, c["id"], preds, thresholds)
+                pairs.append((d == final(pa, q), c.get("lang", "und")))
+            if pairs:
+                langs = {lg: [ok for ok, l2 in pairs if l2 == lg] for lg in {lg for _, lg in pairs}}
+                audit_agreement[q.name] = {"agreement": float(np.mean([ok for ok, _ in pairs])), "n": len(pairs),
+                                           "by_lang": {lg: {"agreement": float(np.mean(v)), "n": len(v)}
+                                                       for lg, v in sorted(langs.items())}}
+
     created = dt.datetime.now(dt.timezone.utc)
     return {
         "id": _calibration_id(suite, convs, created),
@@ -297,6 +318,7 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
         "thresholds": thresholds,
         "suite_choice": {k: v for k, v in choice.items() if k not in ("routes", "thresholds")},
         "budget_met": choice["budget_overrun"] == 0,
+        "audit_agreement": audit_agreement,
         "configs": sorted(({k: v for k, v in c.items() if k not in ("routes", "thresholds")} for c in configs),
                           key=lambda c: (c["budget_overrun"] > 0, c["short"], c["usd_per_conv"])),
         "report": report,

@@ -1,0 +1,54 @@
+{
+  "_comment": "Staging copy of every span's full content, kept a few days. The evaluation worker reads it and copies what the retention decision keeps into payload-*.",
+  "settings": {
+    "index.codec": "zstd"
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "_routing": {
+      "required": true
+    },
+    "properties": {
+      "tenant_id": {
+        "type": "keyword"
+      },
+      "trace_id": {
+        "type": "keyword"
+      },
+      "span_id": {
+        "type": "keyword"
+      },
+      "session_id": {
+        "type": "keyword"
+      },
+      "start_time": {
+        "type": "date_nanos"
+      },
+      "type": {
+        "type": "keyword"
+      },
+      "input_text": {
+        "type": "match_only_text"
+      },
+      "output_text": {
+        "type": "match_only_text"
+      },
+      "system_text": {
+        "type": "match_only_text"
+      },
+      "raw": {
+        "type": "object",
+        "enabled": false
+      },
+      "blob_uri": {
+        "type": "keyword"
+      },
+      "redacted": {
+        "type": "boolean"
+      },
+      "ingested_at": {
+        "type": "date"
+      }
+    }
+  }
+}

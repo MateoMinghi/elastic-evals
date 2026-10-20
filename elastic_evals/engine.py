@@ -91,12 +91,14 @@ class Engine:
             top = p
         ctx = conv.get("trace_ctx") or {}
         exp = conv.get("experiment") or {}
+        conv_key = conv["id"] + ("@" + conv["version"] if conv.get("version") else "")
         return {
-            "id": score_id(self.cal_id, ev.version, conv["id"], q.name, q.criteria_version, reason),
+            "id": score_id(self.cal_id, ev.version, conv_key, q.name, q.criteria_version, reason),
             "tenant_id": conv.get("tenant_id"), "conversation_id": conv["id"], "trace_id": conv.get("trace_id"),
             "observation_id": None, "session_id": conv.get("session_id"),
             "check": q.name, "question": q.name, "value": value, "p": top, "probs": probs, "label": label,
             "explanation": None, "decision": reason == "route", "sample_reason": reason,
+            "conversation_version": conv.get("version"),
             "evaluator": {"id": ev.id, "kind": ev.type, "tier": ev.rank, "version": ev.version,
                           "criteria_version": q.criteria_version},
             "calibration_id": self.cal_id, "route": self.routes.get(q.name, []),

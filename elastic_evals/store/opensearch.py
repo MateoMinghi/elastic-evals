@@ -16,11 +16,11 @@ from importlib import resources
 
 import httpx
 
-KINDS = ("obs", "payload", "scores", "traces", "embeddings", "metrics")
+KINDS = ("obs", "stage", "payload", "scores", "traces", "embeddings", "metrics")
 
 # days hot, days until delete (DESIGN.md §7). Scores and metrics outlive payloads.
 DEFAULT_RETENTION = {
-    "obs": (14, 180), "payload": (14, 30), "scores": (14, 400), "traces": (14, 400),
+    "obs": (14, 180), "stage": (2, 3), "payload": (14, 30), "scores": (14, 400), "traces": (14, 400),
     "embeddings": (14, 180), "metrics": (14, 800),
 }
 
