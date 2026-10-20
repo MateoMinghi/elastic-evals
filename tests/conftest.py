@@ -32,7 +32,7 @@ def opensearch():
         pytest.skip("OpenSearch not running")
     from elastic_evals.store.opensearch import OpenSearch
     os_ = OpenSearch(OS_URL, prefix=f"t{uuid.uuid4().hex[:6]}")
-    os_.setup(pools=("shared", "acme"))
+    os_.setup(pools=("shared", "acme", "pipe"))
     yield os_
     os_.teardown()
 
@@ -89,7 +89,7 @@ def collectors(opensearch, tmp_path_factory):
         pytest.skip("Kafka not running")
     tmp = tmp_path_factory.mktemp("collector")
     ingest = yaml.safe_load((ROOT / "deploy/collector/ingest.yaml").read_text())
-    ingest["exporters"]["elasticevals_opensearch"]["pools"] = {"acme": "acme"}
+    ingest["exporters"]["elasticevals_opensearch"]["pools"] = {"acme": "acme", "pipe": "pipe"}
     (tmp / "ingest.yaml").write_text(yaml.safe_dump(ingest))
     otlp, gh, ih = free_port(), free_port(), free_port()
     env = dict(os.environ, EE_KAFKA_TOPIC=f"ee-spans-{uuid.uuid4().hex[:8]}", EE_INGEST_GROUP=f"g-{uuid.uuid4().hex[:8]}",
