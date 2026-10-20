@@ -111,6 +111,26 @@ def _from_events(spans, stage_by_span):
     return turns
 
 
+def _trajectory(spans, stage_by_span):
+    steps = []
+    for s in spans:
+        c = _content(stage_by_span, s)
+        step = {"span_id": s["span_id"], "type": s.get("type", "SPAN"), "name": s["name"], "status": s.get("status"),
+                "error_type": s.get("error_type"), "duration_ms": s.get("duration_ms")}
+        if step["type"] == "TOOL":
+            t = _tool_turn(s, c)
+            step.update(tool=t["name"], args=t["args"], result=t["result"])
+        elif step["type"] == "GENERATION":
+            out = [t for m in _messages(c.get("output_messages")) for t in _texts(m)]
+            calls = [p.get("name") for m in _messages(c.get("output_messages")) for p in m.get("parts", [])
+                     if p.get("type") == "tool_call"]
+            step.update(model=s.get("response_model") or s.get("request_model"),
+                        output=" ".join(out) or (f"calls {', '.join(calls)}" if calls else ""),
+                        input_tokens=(s.get("usage") or {}).get("input_tokens"))
+        steps.append({k: v for k, v in step.items() if v is not None})
+    return steps
+
+
 def _record(spans):
     record = {}
     for s in spans:
@@ -133,6 +153,7 @@ def build(conversation_id: str, spans: list[dict], stage: list[dict], tenant_id:
     agents = [s for s in spans if s.get("type") == "AGENT"]
     has_events = any(_messages(_content(stage_by_span, s).get("input_messages")) for s in agents)
     turns = _from_events(spans, stage_by_span) if has_events else _from_history(spans, stage_by_span)
+    trajectory = _trajectory(spans, stage_by_span)
     record = _record(spans)
     if record_resolver is not None:
         record = record_resolver(record, spans) or record
@@ -142,7 +163,7 @@ def build(conversation_id: str, spans: list[dict], stage: list[dict], tenant_id:
                      if s.get("type") == "GENERATION" and (s.get("response_model") or s.get("request_model"))})
     conv = {
         "id": conversation_id, "tenant_id": tenant_id or first.get("tenant_id"), "lang": lang,
-        "turns": turns, "record": record,
+        "turns": turns, "record": record, "trajectory": trajectory,
         "trace_id": first.get("trace_id"), "trace_ids": sorted({s["trace_id"] for s in spans}),
         "session_id": first.get("session_id"),
         "trace_ctx": {"agent": next((s.get("agent_name") for s in spans if s.get("agent_name")), None),
@@ -174,6 +195,7 @@ def rollup(conv: dict, spans: list[dict]) -> dict:
         "n_turns": sum(t["role"] != "tool" for t in conv["turns"]),
         "n_llm_calls": len(gens), "n_tool_calls": len(tools),
         "cost_usd": sum(s.get("cost_usd") or 0 for s in spans),
+        "price_ids": sorted({s["price_id"] for s in spans if s.get("price_id")}),
         "input_tokens": sum(u.get("input_tokens", 0) for u in usage),
         "output_tokens": sum(u.get("output_tokens", 0) for u in usage),
         "error": any(s.get("status") == "ERROR" for s in spans),

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
@@ -21,13 +23,60 @@ type osExporter struct {
 	cfg    *Config
 	set    exporter.Settings
 	client *http.Client
-	prices priceBook
+	prices atomic.Pointer[priceBook]
 	logger *zap.Logger
 	now    func() time.Time
+	stop   chan struct{}
 }
 
 func newExporter(cfg *Config, set exporter.Settings) *osExporter {
-	return &osExporter{cfg: cfg, set: set, logger: set.Logger, now: time.Now}
+	return &osExporter{cfg: cfg, set: set, logger: set.Logger, now: time.Now, stop: make(chan struct{})}
+}
+
+func (e *osExporter) book() priceBook {
+	if b := e.prices.Load(); b != nil {
+		return *b
+	}
+	return nil
+}
+
+// watchPrices reloads the prices file when it changes, so a new price takes effect without a
+// restart (spans already stored are re-priced by `elastic_evals reprice`).
+func (e *osExporter) watchPrices(interval time.Duration) {
+	var last time.Time
+	if st, err := os.Stat(e.cfg.PricesFile); err == nil {
+		last = st.ModTime()
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-e.stop:
+			return
+		case <-t.C:
+			st, err := os.Stat(e.cfg.PricesFile)
+			if err != nil || !st.ModTime().After(last) {
+				continue
+			}
+			book, err := loadPrices(e.cfg.PricesFile)
+			if err != nil {
+				e.logger.Warn("prices file not reloaded", zap.Error(err))
+				continue
+			}
+			last = st.ModTime()
+			e.prices.Store(&book)
+			e.logger.Info("prices reloaded", zap.Int("prices", len(book)))
+		}
+	}
+}
+
+func (e *osExporter) shutdown(context.Context) error {
+	select {
+	case <-e.stop:
+	default:
+		close(e.stop)
+	}
+	return nil
 }
 
 func (e *osExporter) start(ctx context.Context, host component.Host) error {
@@ -36,8 +85,15 @@ func (e *osExporter) start(ctx context.Context, host component.Host) error {
 		return err
 	}
 	e.client = client
-	e.prices, err = loadPrices(e.cfg.PricesFile)
-	return err
+	book, err := loadPrices(e.cfg.PricesFile)
+	if err != nil {
+		return err
+	}
+	e.prices.Store(&book)
+	if e.cfg.PricesFile != "" && e.cfg.PricesReloadInterval > 0 {
+		go e.watchPrices(e.cfg.PricesReloadInterval)
+	}
+	return nil
 }
 
 func (e *osExporter) pushTraces(ctx context.Context, td ptrace.Traces) error {

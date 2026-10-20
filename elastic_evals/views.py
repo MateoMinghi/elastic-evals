@@ -9,6 +9,7 @@ View syntax: "<part>[|<part>...]", parts joined with a space:
   first_assistant:N    first N assistant messages
   last_assistant:N     last N assistant messages
   tools                the TOOL lines
+  trajectory           the agent's steps in order, with errors
   record:a/b           "record a: <value>." using the first field present (a, else b)
 """
 
@@ -46,6 +47,9 @@ def view(conv: dict, spec: str) -> str:
             parts.append(" ".join(asst[-int(arg or 1):]))
         elif name == "tools":
             parts.append(" ".join(line for line in text_of(conv).splitlines() if line.startswith("TOOL")))
+        elif name == "trajectory":
+            from .trajectory import render, steps
+            parts.append(render(steps(conv)))
         elif name == "record":
             fields = arg.split("/")
             label = fields[-1]

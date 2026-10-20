@@ -18,6 +18,8 @@ Services (OpenSearch, Postgres, Kafka; see deploy/):
   shadow | promote | reject  CALIBRATION_ID
   drift       --tenant T --suite ID
   annotate    --tenant T --queue QUEUE_ID [--annotator you]                 keyboard labelling in the terminal
+  prices      [--load prices.json] [--export collector-prices.json]         the price book (collector reloads it)
+  reprice     --tenant T --from 2026-10-01 [--to ...]                       recompute stored conversations' cost
 
 Labelled conversations carry "labels": {question: 0|1|class}. OpenRouter calls need OPENROUTER_API_KEY
 (or EVAL_ENV_FILE pointing at an env file outside the repository).
@@ -219,6 +221,29 @@ def cmd_drift(a):
     print(json.dumps(check(pg, os_, reg, a.tenant, a.suite, a.days, a.min_n, a.threshold), indent=1, default=str))
 
 
+def cmd_reprice(a):
+    from .pricing import PriceBook, reprice, rows_from_db
+    pg, os_, reg = _stores()
+    rows = json.loads(Path(a.prices).read_text()) if a.prices else rows_from_db(pg)
+    print(json.dumps(reprice(os_, reg.pool(a.tenant), a.tenant, PriceBook(rows), getattr(a, "from"), a.to)))
+
+
+def cmd_prices(a):
+    from .pricing import rows_from_db
+    from .store.postgres import Jsonb
+    pg, _, _ = _stores()
+    if a.load:
+        rows = json.loads(Path(a.load).read_text())
+        with pg.tx() as c:
+            c.execute("DELETE FROM model_prices")
+            for r in rows:
+                c.execute("INSERT INTO model_prices (model_pattern, start_date, tiers, priority) VALUES (%s, %s, %s, %s)",
+                          (r["model_pattern"], r.get("start_date", "1970-01-01"), Jsonb(r["tiers"]), r.get("priority", 0)))
+    if a.export:
+        Path(a.export).write_text(json.dumps(rows_from_db(pg), indent=1))
+    print(f"{len(rows_from_db(pg))} prices")
+
+
 def cmd_annotate(a):
     from . import annotation
     from .conversation import build
@@ -327,6 +352,14 @@ def main(argv=None):
     d.add_argument("--days", type=float, default=7)
     d.add_argument("--min-n", type=int, default=50)
     d.add_argument("--threshold", type=float, default=0.05)
+    rp2 = sub.add_parser("reprice", help="recompute conversation costs from stored usage")
+    rp2.add_argument("--tenant", required=True)
+    rp2.add_argument("--from", required=True)
+    rp2.add_argument("--to")
+    rp2.add_argument("--prices", help="prices JSON file (default: the model_prices table)")
+    pr = sub.add_parser("prices", help="load the model_prices table from JSON and/or export the collector prices file")
+    pr.add_argument("--load")
+    pr.add_argument("--export")
     an = sub.add_parser("annotate")
     an.add_argument("--tenant", required=True)
     an.add_argument("--queue", required=True)
@@ -342,7 +375,8 @@ def main(argv=None):
     handler = {"calibrate": cmd_calibrate, "run": cmd_run, "experiment": cmd_experiment, "synth": cmd_synth,
                "setup": cmd_setup, "serve": cmd_serve, "tracker": cmd_tracker, "worker": cmd_worker,
                "replay": cmd_replay, "suite": cmd_suite, "register": cmd_register, "shadow": cmd_lifecycle,
-               "promote": cmd_lifecycle, "reject": cmd_lifecycle, "drift": cmd_drift, "annotate": cmd_annotate}[args.cmd]
+               "promote": cmd_lifecycle, "reject": cmd_lifecycle, "drift": cmd_drift, "annotate": cmd_annotate,
+               "reprice": cmd_reprice, "prices": cmd_prices}[args.cmd]
     return handler(args) or 0
 
 

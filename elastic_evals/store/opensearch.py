@@ -134,6 +134,22 @@ class OpenSearch:
             raise OpenSearchError(f"bulk {kind}: {len(errors)} errors, first: {json.dumps(errors[0])[:500]}")
         return written, dup
 
+    def update(self, items, refresh: bool = False):
+        """Partial updates: items of (id, {"doc": {...}}, routing, concrete index name)."""
+        lines = []
+        for _id, body, routing, index in items:
+            meta = {"_index": index, "_id": _id}
+            if routing:
+                meta["routing"] = routing
+            lines += [{"update": meta}, body]
+        if not lines:
+            return 0
+        res = self.req("POST", "/_bulk", lines, refresh="true" if refresh else "false")
+        errors = [next(iter(i.values())).get("error") for i in res["items"] if next(iter(i.values())).get("status", 200) >= 300]
+        if errors:
+            raise OpenSearchError(f"bulk update: {len(errors)} errors, first: {json.dumps(errors[0])[:500]}")
+        return len(res["items"])
+
     def refresh(self, kind: str | None = None):
         self.req("POST", f"/{self.pattern(kind) if kind else self.prefix + '-*'}/_refresh")
 

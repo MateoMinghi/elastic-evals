@@ -32,6 +32,27 @@ DATA = ROOT / "experiments" / "data"
 RULES_SUITE = yaml.safe_load((ROOT / "examples/banking_suite.yaml").read_text())
 RULES_SUITE["evaluators"] = [{"id": "rules", "type": "rules"}]
 RULES_SUITE["policy"] = {"allow_hosted": False, "target_accuracy": 0.95}
+RULES_SUITE["questions"]["tool_failures"] = {"ask": "Did any tool call fail?", "view": "trajectory", "rule": "tool_errors",
+                                             "scope": "trajectory"}
+RULES_SUITE["questions"]["step_failed"] = {"ask": "Did this tool call fail?", "view": "tools", "rule": "step_failed",
+                                           "scope": "observation", "select": {"type": "TOOL"}}
+
+
+def with_step_labels(convs):
+    """Tool status and the labels of the trajectory and observation checks, from the tool results."""
+    out = []
+    for c in convs:
+        c = dict(c, labels=dict(c.get("labels", {})), turns=[dict(t) for t in c["turns"]])
+        failed_any = 0
+        for i, t in enumerate(c["turns"]):
+            if t["role"] == "tool":
+                failed = str(t.get("result", "")).lower().startswith("error")
+                t["status"] = "ERROR" if failed else "OK"
+                c["labels"][f"step_failed@t{i}"] = int(failed)
+                failed_any |= failed
+        c["labels"]["tool_failures"] = int(failed_any)
+        out.append(c)
+    return out
 RULES_YAML = yaml.safe_dump(RULES_SUITE, allow_unicode=True)
 
 
@@ -40,12 +61,13 @@ def test_pipeline_end_to_end(opensearch, postgres, collectors, tmp_path):
     reg.ensure_tenant("pipe", tier="dedicated", index_pool="pipe", allow_hosted=False)
     reg.put_suite("pipe", "banking", RULES_YAML, agent_name="bank-assistant")
     suite = Suite.from_yaml(RULES_YAML)
-    train = load("synthetic.jsonl", 80)
-    cal, evs = calibrate(suite, train, {(c["id"], q): v for c in train for q, v in c["labels"].items()})
+    train = with_step_labels(load("synthetic.jsonl", 80))
+    cal, evs = calibrate(suite, train, {(c["id"], q): v for c in train for q, v in c["labels"].items() if "@" not in q})
+    assert cal["observation"]["routes"] == {"step_failed": ["rules"]}
     reg.save_calibration("pipe", "banking", cal, evs)
     reg.promote(cal["id"])
 
-    convs = load("synthetic_c.jsonl", 40)
+    convs = with_step_labels(load("synthetic_c.jsonl", 40))
     n_spans = replay(convs, collectors["otlp"], tenant="pipe")
 
     async def drive():
@@ -92,8 +114,18 @@ def test_pipeline_end_to_end(opensearch, postgres, collectors, tmp_path):
         assert got == direct[cid], cid
         assert t["flags"] == sorted(k for k, v in direct[cid].items() if v == 1)
         assert t["n_turns"] == sum(x["role"] != "tool" for x in next(c for c in convs if c["id"] == cid)["turns"])
-    n_scores = opensearch.count("scores", pool="pipe")
-    assert n_scores == len(convs) * len(suite.questions)
+    # conversation and trajectory checks: one decision each; the observation check: one per tool call
+    n_tools = sum(t["role"] == "tool" for c in convs for t in c["turns"])
+    n_decisions = opensearch.count("scores", {"term": {"decision": True}}, pool="pipe")
+    assert n_decisions == len(convs) * (len(suite.questions) - 1) + n_tools
+    steps = opensearch.hits("scores", {"size": 1000, "query": {"bool": {"filter": [
+        {"term": {"check": "step_failed"}}, {"term": {"decision": True}}]}}}, "pipe")
+    tool_spans = {s["span_id"] for s in opensearch.hits("obs", {"size": 5000, "query": {"term": {"type": "TOOL"}}}, "pipe")}
+    assert len(steps) == n_tools and {s["observation_id"] for s in steps} == tool_spans
+    for c in convs:
+        t = traces[c["id"]]
+        assert t["scores"]["step_failed"]["steps"] == sum(x["role"] == "tool" for x in c["turns"])
+        assert t["scores"]["step_failed"]["value"] == c["labels"]["tool_failures"] == t["scores"]["tool_failures"]["value"]
 
     # retention: content is copied to payload only for kept conversations
     kept = [t for t in traces.values() if t["content_kept"]]

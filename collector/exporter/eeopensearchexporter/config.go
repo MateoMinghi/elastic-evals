@@ -9,6 +9,7 @@ package eeopensearchexporter
 
 import (
 	"errors"
+	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
@@ -31,6 +32,8 @@ type Config struct {
 	Content string `mapstructure:"content"`
 	// JSON file with model prices (same shape as the model_prices table). Empty: no cost.
 	PricesFile string `mapstructure:"prices_file"`
+	// How often the prices file is checked for changes (0: read once at start).
+	PricesReloadInterval time.Duration `mapstructure:"prices_reload_interval"`
 	// Basic auth for the OpenSearch security plugin.
 	Username string `mapstructure:"username"`
 	Password string `mapstructure:"password"`
@@ -56,11 +59,12 @@ func createDefaultConfig() component.Config {
 	client := confighttp.NewDefaultClientConfig()
 	client.Endpoint = "http://localhost:9200"
 	return &Config{
-		HTTP:          client,
-		Prefix:        "ee",
-		PreviewChars:  200,
-		Content:       "stage",
-		TimeoutConfig: exporterhelper.NewDefaultTimeoutConfig(),
-		BackOffConfig: configretry.NewDefaultBackOffConfig(),
+		HTTP:                 client,
+		Prefix:               "ee",
+		PreviewChars:         200,
+		Content:              "stage",
+		PricesReloadInterval: time.Minute,
+		TimeoutConfig:        exporterhelper.NewDefaultTimeoutConfig(),
+		BackOffConfig:        configretry.NewDefaultBackOffConfig(),
 	}
 }

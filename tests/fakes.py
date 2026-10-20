@@ -13,14 +13,14 @@ class FakeHosted(Evaluator):
     hosted = True
 
     async def evaluate(self, conv, questions):
-        ans = conv["fake"].get(self.id, {})
+        ans = conv.get("fake", {}).get(self.id, {})
         return ({q.name: ans.get(q.name) for q in questions}, self.cfg.get("usd", 0.0001),
                 self.cfg.get("ms", 500) / 1000)
 
 
 class FakeLocal(Evaluator):
     def evaluate(self, conv, questions):
-        ans = conv["fake"].get(self.id, {})
+        ans = conv.get("fake", {}).get(self.id, {})
         return {q.name: ans[q.name] for q in questions if q.name in ans}, 0.0, 0.001
 
 

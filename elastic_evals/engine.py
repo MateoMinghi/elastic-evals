@@ -28,6 +28,18 @@ def unit_hash(key: str) -> float:
 
 class Engine:
     def __init__(self, suite, calibration, evaluators, audit: bool = True):
+        main, obs = suite.split()
+        self.obs_engine = None
+        if obs is not None and calibration.get("observation"):
+            from .evaluators import LocalHeadEvaluator as _Local, build
+            client = next((e.client for e in evaluators if e.client is not None), None)
+            obs_evs = build(obs, client)  # evaluators whose prompts list the observation checks only
+            for e in obs_evs:
+                twin = next((x for x in evaluators if x.id == e.id), None)
+                if isinstance(e, _Local) and twin is not None:
+                    e.heads = twin.heads
+            self.obs_engine = Engine(obs, calibration["observation"], obs_evs, audit)
+        suite = main
         self.suite, self.cal = suite, calibration
         self.routes = calibration["routes"]
         self.th = {q: {e: tuple(t) if t else None for e, t in th.items()} for q, th in calibration["thresholds"].items()}
@@ -114,8 +126,45 @@ class Engine:
         for ev in self.evaluators:
             if isinstance(ev, LocalHeadEvaluator):
                 qs = [q for q in self.suite.questions if ev.id in self.routes[q.name]]
-                local_out, local_lat = ev.evaluate_batch(convs, qs)
-        return await asyncio.gather(*(self._score(c, local_out, local_lat) for c in convs))
+                if qs:
+                    local_out, local_lat = ev.evaluate_batch(convs, qs)
+        if self.suite.questions:
+            results = await asyncio.gather(*(self._score(c, local_out, local_lat) for c in convs))
+        else:
+            results = [{"conversation_id": c["id"], "scores": [], "usd": 0.0, "audit_usd": 0.0, "ms": 0.0,
+                        "evaluators_called": [], "decisions": {}} for c in convs]
+        if self.obs_engine is not None:
+            await self._observations(convs, results)
+        return results
+
+    async def _observations(self, convs, results):
+        """Score the selected steps of each conversation and attach them as observation scores."""
+        from .trajectory import items
+        by_conv = {c["id"]: items(c, self.obs_engine.suite.questions) for c in convs}
+        flat = [it for its in by_conv.values() for it in its]
+        if not flat:
+            for r in results:
+                r["observations"] = {}
+            return
+        obs_results = await self.obs_engine.run_async(flat)
+        by_item = {r["conversation_id"]: r for r in obs_results}
+        for c, r in zip(convs, results):
+            r["observations"] = {}
+            for it in by_conv[c["id"]]:
+                o = by_item[it["id"]]
+                for s in o["scores"]:
+                    if s["check"] not in it["applies"]:
+                        continue
+                    s["conversation_id"], s["observation_id"] = c["id"], it["observation_id"]
+                    r["scores"].append(s)
+                r["observations"][it["observation_id"]] = {k: v for k, v in o["decisions"].items() if k in it["applies"]}
+                r["usd"] += o["usd"]
+                r["audit_usd"] += o["audit_usd"]
+                r["evaluators_called"] = sorted(set(r["evaluators_called"]) | set(o["evaluators_called"]))
+            for check in self.obs_engine.suite.questions:
+                vals = [d[check.name] for d in r["observations"].values() if check.name in d]
+                if vals:
+                    r["decisions"][check.name] = max(vals) if not check.multiclass else vals[-1]
 
     def run(self, convs):
         return asyncio.run(self.run_async(convs))

@@ -178,3 +178,27 @@ func TestBulkHandling(t *testing.T) {
 		t.Fatal("429 must be retried")
 	}
 }
+
+func TestPricesReload(t *testing.T) {
+	e := newTestExporter(t, "http://unused")
+	defer func() { _ = e.shutdown(context.Background()) }()
+	usage := map[string]int64{"input_tokens": 1000, "output_tokens": 100}
+	at := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
+	before, _, _ := e.book().cost("gpt-x", usage, at)
+	go e.watchPrices(10 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	_ = os.WriteFile(e.cfg.PricesFile, []byte(`[{"model_pattern": "^gpt-x", "tiers": [{"input": 2.0, "output": 8.0}]}]`), 0o600)
+	future := time.Now().Add(time.Second)
+	_ = os.Chtimes(e.cfg.PricesFile, future, future)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c, _, _ := e.book().cost("gpt-x", usage, at); c != before {
+			if math.Abs(c-0.0028) > 1e-12 {
+				t.Fatalf("reloaded cost %v", c)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("prices were not reloaded")
+}

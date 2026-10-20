@@ -193,6 +193,25 @@ def _overrun(c, policy):
 
 
 async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None, extra=None):
+    main, obs = suite.split()
+    if obs is not None:
+        # observation checks: every selected step is an item, calibrated like a conversation
+        from . import trajectory
+        items = [it for c in convs for it in trajectory.items(c, obs.questions)]
+        item_labels = trajectory.item_labels(convs, labels)
+        if not item_labels:
+            raise ValueError("observation checks need labels such as 'check@<span_id>'")
+        sub, sub_evs = await calibrate_async(obs, items, item_labels, client)
+        if main.questions:
+            cal, evaluators = await calibrate_async(main, convs, labels, client, extra)
+        else:
+            cal, evaluators = _empty_calibration(main, convs), build(main, client)
+        cal["observation"] = sub
+        for ev in evaluators:  # one set of local heads, keyed by check name
+            twin = next((e for e in sub_evs if e.id == ev.id and isinstance(e, LocalHeadEvaluator)), None)
+            if twin is not None and isinstance(ev, LocalHeadEvaluator):
+                ev.heads.update(twin.heads)
+        return cal, evaluators
     evaluators = build(suite, client)
     questions = suite.questions
     policy = suite.policy
@@ -325,6 +344,16 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
                           key=lambda c: (c["budget_overrun"] > 0, c["short"], c["usd_per_conv"])),
         "report": report,
     }, evaluators
+
+
+def _empty_calibration(suite, convs):
+    created = dt.datetime.now(dt.timezone.utc)
+    return {"id": _calibration_id(suite, convs, created), "created_at": created.isoformat(), "status": "candidate",
+            "suite": suite.name, "suite_version": suite.version, "criteria_versions": {}, "policy": vars(suite.policy),
+            "n_labelled": len(convs), "languages": [], "evaluator_versions": {}, "routes": {}, "thresholds": {},
+            "suite_choice": {"hosted": [], "short": 0, "below_floor": [], "usd_per_conv": 0.0, "ms_per_conv": 0.0,
+                             "accuracy": {}, "strictness": {}, "budget_overrun": 0.0},
+            "budget_met": True, "audit_agreement": {}, "configs": [], "report": {}}
 
 
 def calibrate(suite: Suite, convs, labels, client: OpenRouter | None = None, extra=None):

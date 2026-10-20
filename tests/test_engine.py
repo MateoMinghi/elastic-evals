@@ -174,3 +174,88 @@ def test_build_respects_local_only(suite):
     s = copy.deepcopy(suite)
     s.policy.allow_hosted = False
     assert [e.id for e in build(s, None)] == ["rules"]
+
+
+TRAJ_YAML = """
+name: agent-steps
+judge_preamble: 'Answer with JSON: '
+questions:
+  too_many_steps:
+    ask: Did the agent use more tool calls than needed?
+    view: trajectory
+    rule: step_budget
+    rule_args: {max_tool_calls: 3}
+    scope: trajectory
+    critical: true
+  wrong_order:
+    ask: Did the agent skip the balance check before transferring?
+    view: trajectory
+    rule: expected_sequence
+    rule_args: {sequence: [get_balance, create_transfer]}
+    scope: trajectory
+  step_failed:
+    ask: Did this tool call fail?
+    view: tools
+    rule: step_failed
+    scope: observation
+    select: {type: TOOL}
+evaluators:
+  - {id: rules, type: rules}
+  - {id: judge, type: fake_judge, usd: 0.0001, ms: 700}
+policy: {target_accuracy: 0.95}
+"""
+
+
+def make_agent_convs(n=120, seed=5):
+    import random
+    rng = random.Random(seed)
+    convs = []
+    for i in range(n):
+        tools, labels = [], {}
+        k = rng.randint(1, 5)
+        names = ["get_balance", "create_transfer"] if rng.random() < 0.6 else ["create_transfer", "get_balance"]
+        for j in range(k):
+            name = names[j % 2]
+            failed = rng.random() < 0.3
+            status = "ERROR" if failed else "OK"
+            tools.append({"span_id": f"s{j}", "type": "TOOL", "name": name, "tool": name, "args": {"j": j},
+                          "result": "error: timeout" if failed else "ok", "status": status})
+            labels[f"step_failed@s{j}"] = int(failed)
+        seq = [t["tool"] for t in tools]
+        ordered = "get_balance" in seq and "create_transfer" in seq[seq.index("get_balance"):]
+        labels["too_many_steps"] = int(k > 3)
+        labels["wrong_order"] = int(not ordered)
+        fake = {"judge": {"too_many_steps": float(k > 3), "wrong_order": float(not ordered)}}
+        convs.append({"id": f"a{i}", "lang": "en", "turns": [{"role": "user", "text": "move money"}], "record": {},
+                      "trajectory": tools, "labels": labels, "fake": fake})
+    return convs
+
+
+def test_trajectory_and_observation_checks():
+    s = Suite.from_yaml(TRAJ_YAML)
+    convs = make_agent_convs()
+    labels = {(c["id"], q): v for c in convs for q, v in c["labels"].items() if "@" not in q}
+    cal, evs = calibrate(s, convs, labels)
+    assert cal["routes"] == {"too_many_steps": ["rules"], "wrong_order": ["rules"]}
+    assert cal["observation"]["routes"] == {"step_failed": ["rules"]}
+    assert cal["observation"]["report"]["step_failed"]["chosen"]["accuracy"] == 1.0
+    test = make_agent_convs(30, seed=9)
+    res = Engine(s, cal, evs).run(test)
+    for c, r in zip(test, res):
+        obs = [x for x in r["scores"] if x["observation_id"] and x["decision"]]
+        assert len(obs) == len(c["trajectory"])
+        assert all(x["conversation_id"] == c["id"] for x in obs)
+        assert {x["observation_id"]: x["value"] for x in obs} == {t["span_id"]: int(t["status"] == "ERROR") for t in c["trajectory"]}
+        assert r["decisions"]["step_failed"] == int(any(t["status"] == "ERROR" for t in c["trajectory"]))
+        assert r["decisions"]["too_many_steps"] == c["labels"]["too_many_steps"]
+        assert len({x["id"] for x in r["scores"]}) == len(r["scores"])
+
+
+def test_trajectory_from_plain_turns_and_views():
+    from elastic_evals.trajectory import render, steps
+    from elastic_evals.views import view
+    conv = {"turns": [{"role": "user", "text": "hi"}, {"role": "tool", "name": "get_balance", "args": {}, "result": "error: x"},
+                      {"role": "assistant", "text": "done"}]}
+    st = steps(conv)
+    assert [x["type"] for x in st] == ["TOOL", "GENERATION"] and st[0]["span_id"] == "t1"
+    assert "TOOL get_balance({}) -> error: x" in render(st) and "get_balance" in view(conv, "trajectory")

@@ -49,7 +49,7 @@ class RulesEvaluator(Evaluator):
 
     def evaluate(self, conv, questions):
         t0 = time.perf_counter()
-        out = {q.name: resolve_rule(q.rule)(conv) for q in questions if q.rule}
+        out = {q.name: resolve_rule(q.rule)(conv, **(q.rule_args or {})) for q in questions if q.rule}
         return out, 0.0, time.perf_counter() - t0
 
 
@@ -143,8 +143,11 @@ class JevEvaluator(Evaluator):
     async def evaluate(self, conv, questions):
         qs = {self.suite.ask_key(q): ({"type": "choice", "instructions": q.ask, "criteria": q.classes} if q.multiclass
                                       else {"type": "noul", "instructions": q.ask}) for q in self.suite.questions}
-        res = await self.client.decide(self.model, {"conversation": text_of(conv), "system_of_record": conv.get("record", {})},
-                                       qs, tag=self.id)
+        state = {"conversation": text_of(conv), "system_of_record": conv.get("record", {})}
+        if self.suite.has_trajectory:
+            from .trajectory import render, steps
+            state["trajectory"] = render(steps(conv))
+        res = await self.client.decide(self.model, state, qs, tag=self.id)
         out = {}
         for q in questions:
             ans = res["answers"][self.suite.ask_key(q)]
@@ -178,6 +181,9 @@ class LLMJudgeEvaluator(Evaluator):
         elif self.cfg.get("reasoning_effort"):
             params["reasoning"] = {"effort": self.cfg["reasoning_effort"]}
         user = f"System of record: {json.dumps(conv.get('record', {}), ensure_ascii=False)}\n\nConversation:\n{text_of(conv)}"
+        if self.suite.has_trajectory:  # only then, so existing suites keep byte-identical prompts
+            from .trajectory import render, steps
+            user += f"\n\nTrajectory (agent steps in order):\n{render(steps(conv))}"
         res = await self.client.chat(self.model, [{"role": "system", "content": self.system_prompt()},
                                                   {"role": "user", "content": user}], tag=self.id,
                                      url=self.cfg.get("base_url"), api_key_env=self.cfg.get("api_key_env", "OPENROUTER_API_KEY"),
@@ -206,7 +212,10 @@ def resolve_rule(name: str):
     if ":" in name:
         module, fn = name.split(":", 1)
         return getattr(importlib.import_module(module), fn)
-    return getattr(rules_lib, name)
+    if hasattr(rules_lib, name):
+        return getattr(rules_lib, name)
+    from . import trajectory
+    return getattr(trajectory, name)
 
 
 TYPES = {"rules": RulesEvaluator, "local_head": LocalHeadEvaluator, "jev": JevEvaluator, "llm": LLMJudgeEvaluator}

@@ -17,6 +17,8 @@
       "n_llm_calls": {"type": "integer"},
       "n_tool_calls": {"type": "integer"},
       "cost_usd": {"type": "double"},
+      "price_ids": {"type": "keyword"},
+      "repriced_at": {"type": "date"},
       "input_tokens": {"type": "long"},
       "output_tokens": {"type": "long"},
       "error": {"type": "boolean"},

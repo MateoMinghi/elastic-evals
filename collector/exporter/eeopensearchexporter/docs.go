@@ -114,7 +114,7 @@ func (e *osExporter) buildDocs(td ptrace.Traces, now time.Time) []item {
 					usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
 					doc["usage"] = usage
 					model := firstStr(a, "gen_ai.response.model", "gen_ai.request.model")
-					if cost, priceID, ok := e.prices.cost(model, usage, start); ok {
+					if cost, priceID, ok := e.book().cost(model, usage, start); ok {
 						doc["cost_usd"] = cost
 						doc["price_id"] = priceID
 					}

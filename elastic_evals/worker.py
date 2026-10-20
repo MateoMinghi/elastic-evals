@@ -194,16 +194,26 @@ class Worker:
             tenant_cfg = self.registry.tenant(tenant)
             keep_rate = (tenant_cfg.get("retention") or {}).get("keep_rate", DEFAULT_KEEP_RATE)
             keep, reasons = retention_decision(conv, spans, sc, keep_rate)
-            decided = {s["check"]: s for s in sc if s["decision"]}
+            decided = {s["check"]: s for s in sc if s["decision"] and not s.get("observation_id")}
+            steps = {}  # observation checks: one decision per step, rolled up per check
+            for s_ in sc:
+                if s_["decision"] and s_.get("observation_id"):
+                    steps.setdefault(s_["check"], []).append(s_)
             doc = rollup(conv, spans)
+            score_map = {c: {"value": s["value"], "label": s["label"], "p": s["p"], "evaluator": s["evaluator"]["id"],
+                             "tier": s["evaluator"]["tier"]} for c, s in decided.items()}
+            for c, ss in steps.items():
+                flagged = [x["observation_id"] for x in ss if x["value"] == 1]
+                score_map[c] = {"value": int(bool(flagged)), "steps": len(ss), "flagged_steps": flagged,
+                                "evaluator": ss[0]["evaluator"]["id"], "tier": max(x["evaluator"]["tier"] for x in ss)}
             doc.update({
                 "updated_at": now_utc().isoformat(), "evaluated_at": now_utc().isoformat(),
-                "eval_status": "scored" if decided else "unscored",
-                "calibration_id": next(iter({s["calibration_id"] for s in decided.values()}), None),
+                "eval_status": "scored" if score_map else "unscored",
+                "calibration_id": next(iter({s["calibration_id"] for s in decided.values()}
+                                            | {x["calibration_id"] for ss in steps.values() for x in ss}), None),
                 "eval_cost_usd": eval_cost.get(key, 0.0),
-                "flags": sorted(c for c, s in decided.items() if s["value"] == 1),
-                "scores": {c: {"value": s["value"], "label": s["label"], "p": s["p"], "evaluator": s["evaluator"]["id"],
-                               "tier": s["evaluator"]["tier"]} for c, s in decided.items()},
+                "flags": sorted(c for c, v in score_map.items() if v["value"] == 1),
+                "scores": score_map,
                 "content_kept": keep, "retention_reasons": reasons,
             })
             doc = {k: v for k, v in doc.items() if v is not None}
@@ -212,11 +222,11 @@ class Worker:
             if keep:
                 by_pool[pool]["payload"] += [(d["_id"], {k: v for k, v in d.items() if k != "_id"}, d["trace_id"])
                                              for d in stage]
-            for c, s in decided.items():
+            for c, v in score_map.items():
                 m = metrics[(pool, tenant, conv["trace_ctx"]["agent"] or "", c)]
                 m["n"] += 1
-                m["flagged"] += int(s["value"] == 1)
-                m["cost_usd"] += s["cost_usd"] or 0.0
+                m["flagged"] += int(v["value"] == 1)
+                m["cost_usd"] += sum(x["cost_usd"] or 0.0 for x in sc if x["check"] == c and x["decision"])
             if self.embed:
                 by_pool[pool]["embeddings"].append(self._embedding(conv))
         for (pool, tenant, agent, check), m in metrics.items():

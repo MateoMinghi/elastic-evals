@@ -18,6 +18,13 @@ class Question:
     layers: list[str] | None = None  # restrict to these evaluator ids (user choice)
     classes: dict[str, str] | None = None  # multi-class check: {label: description}; None = binary
     criteria_version: str = "1"  # bump when the wording or the meaning of the check changes
+    scope: str = "conversation"  # conversation | trajectory | observation (see trajectory.py)
+    select: dict | None = None   # observation scope: which steps, e.g. {"type": "TOOL", "tool": "~transfer"}
+    rule_args: dict | None = None  # keyword arguments for the rule, e.g. {"max_tool_calls": 8}
+
+    def __post_init__(self):
+        if self.scope not in ("conversation", "trajectory", "observation"):
+            raise ValueError(f"{self.name}: unknown scope {self.scope!r}")
 
     @property
     def multiclass(self) -> bool:
@@ -44,6 +51,10 @@ class Suite:
     evaluators: list[dict]
     policy: Policy = field(default_factory=Policy)
     source: str = ""  # the YAML text; its hash is the suite version
+    observation_preamble: str = ("You evaluate one step (a tool call or a model output) of an AI agent, with the "
+                                 "system-of-record entry as ground truth. Answer each question with true or false. "
+                                 "Return only JSON with these keys: ")
+    step_items: bool = False  # True for the sub-suite whose items are steps (observation checks)
 
     @classmethod
     def load(cls, path: str | Path) -> "Suite":
@@ -64,11 +75,27 @@ class Suite:
             evaluators=raw["evaluators"],
             policy=Policy(**policy),
             source=text,
+            **({"observation_preamble": raw["observation_preamble"]} if raw.get("observation_preamble") else {}),
         )
 
     @property
     def version(self) -> str:
         return hashlib.sha256(self.source.encode()).hexdigest()[:12]
+
+    @property
+    def has_trajectory(self) -> bool:
+        return any(q.scope == "trajectory" for q in self.questions)
+
+    def split(self):
+        """(suite of conversation + trajectory checks, suite of observation checks or None)."""
+        import copy
+        obs = [q for q in self.questions if q.scope == "observation"]
+        if not obs or self.step_items:
+            return self, None
+        main, sub = copy.copy(self), copy.copy(self)
+        main.questions = [q for q in self.questions if q.scope != "observation"]
+        sub.questions, sub.judge_preamble, sub.step_items = obs, self.observation_preamble, True
+        return main, sub
 
     def question(self, name: str) -> Question:
         return next(q for q in self.questions if q.name == name)

@@ -516,6 +516,20 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
         pg.audit(c.actor, "prices.put", None, c.tenant, n=len(rows))
         return {"n": len(rows)}
 
+    @app.get("/v1/model-prices/export")
+    def export_prices(c: Ctx = Depends(need("prices:read"))):
+        """The collector's prices file (`prices_file`), reloaded by the collector when it changes."""
+        from .pricing import rows_from_db
+        return rows_from_db(pg)
+
+    @app.post("/v1/reprice")
+    def reprice(frm: str = Body(..., alias="from", embed=True), to: str | None = Body(None, embed=True),
+                c: Ctx = Depends(need("prices:write"))):
+        from .pricing import PriceBook, reprice as run, rows_from_db
+        out = run(os_, pool(c), c.tenant, PriceBook(rows_from_db(pg)), frm, to)
+        pg.audit(c.actor, "reprice", None, c.tenant, since=frm, until=to, **out)
+        return out
+
     @app.get("/v1/audit-log")
     def audit_log(limit: int = 100, c: Ctx = Depends(need("audit:read"))):
         return pg.all("SELECT * FROM audit_log WHERE tenant_id=%s ORDER BY at DESC LIMIT %s", c.tenant, limit)

@@ -23,6 +23,7 @@ func createTraces(ctx context.Context, set exporter.Settings, cfg component.Conf
 	e := newExporter(c, set)
 	return exporterhelper.NewTraces(ctx, set, cfg, e.pushTraces,
 		exporterhelper.WithStart(e.start),
+		exporterhelper.WithShutdown(e.shutdown),
 		exporterhelper.WithTimeout(c.TimeoutConfig),
 		exporterhelper.WithRetry(c.BackOffConfig),
 		exporterhelper.WithCapabilities(consumer.Capabilities{MutatesData: false}))

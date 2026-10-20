@@ -102,7 +102,7 @@ def emit(tracer, conv: dict, agent: str = "bank-assistant", model: str = "demo-m
                     "gen_ai.tool.call.id": call_id,
                     "gen_ai.tool.call.arguments": json.dumps(step.get("args", {}), ensure_ascii=False),
                     "gen_ai.tool.call.result": str(step.get("result", ""))})
-                if str(step.get("result", "")).startswith("error"):
+                if step.get("status", "ERROR" if str(step.get("result", "")).lower().startswith("error") else "OK") == "ERROR":
                     t.set_status(trace.Status(trace.StatusCode.ERROR))
                 t.end(end_time=tick())
                 n += 1
