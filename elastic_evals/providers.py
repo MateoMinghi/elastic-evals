@@ -52,13 +52,23 @@ def _cache_path(url: str, body: dict) -> Path:
 
 class OpenRouter:
     def __init__(self, concurrency: int = 8):
-        self._sem = asyncio.Semaphore(concurrency)
-        self._client = httpx.AsyncClient(timeout=120)
-        self._lock = asyncio.Lock()
+        self._concurrency = concurrency
+        self._loop = None
         self._spent = spent_usd()  # read the ledger once; keep the running total in memory
 
+    def _bind(self):
+        """httpx clients and asyncio primitives belong to one event loop; rebuild them per loop
+        so the same OpenRouter object works across several asyncio.run() calls."""
+        loop = asyncio.get_running_loop()
+        if loop is not self._loop:
+            self._loop = loop
+            self._sem = asyncio.Semaphore(self._concurrency)
+            self._client = httpx.AsyncClient(timeout=120)
+            self._lock = asyncio.Lock()
+
     async def close(self):
-        await self._client.aclose()
+        if self._loop is not None:
+            await self._client.aclose()
 
     async def _post(self, url: str, body: dict, tag: str) -> dict:
         path = _cache_path(url, body)
@@ -68,6 +78,7 @@ class OpenRouter:
             return cached
         if os.environ.get("EVAL_OFFLINE") == "1":
             raise CacheMiss(url)
+        self._bind()
         async with self._sem:
             if self._spent >= BUDGET_USD:
                 raise BudgetExceeded(f"budget of ${BUDGET_USD} reached")

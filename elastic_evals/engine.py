@@ -74,3 +74,15 @@ class Engine:
 
     def run(self, convs):
         return asyncio.run(self.run_async(convs))
+
+
+def drift_report(results):
+    """Agreement between routed decisions and the audit judge, per question, on audited conversations.
+    A drop against the calibration-time agreement means the cheap layers no longer fit the traffic."""
+    agree = {}
+    for r in results:
+        audit = {s["question"]: s["value"] for s in r["scores"] if s["sample_reason"] == "random_audit"}
+        for s in r["scores"]:
+            if s["decision"] and s["question"] in audit:
+                agree.setdefault(s["question"], []).append(s["value"] == audit[s["question"]])
+    return {q: {"n": len(v), "agreement": sum(v) / len(v)} for q, v in agree.items()}

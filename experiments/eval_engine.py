@@ -19,7 +19,7 @@ from tabulate import tabulate
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
 from elastic_evals.calibrate import calibrate  # noqa: E402
-from elastic_evals.engine import Engine  # noqa: E402
+from elastic_evals.engine import Engine, drift_report  # noqa: E402
 from elastic_evals.providers import OpenRouter, load_env, spent_usd  # noqa: E402
 from elastic_evals.suite import Suite  # noqa: E402
 
@@ -75,7 +75,9 @@ def evaluate(name, suite, calib_convs, tests, client, rows, md):
                        ["question", "chosen route", "dev acc %", "best dev acc %", "meets target"], tablefmt="github"))
     for test_name, convs in tests.items():
         gold = labels_of(convs)
-        eng = summarize(Engine(suite, cal, evaluators).run(convs), gold, qs)
+        results = Engine(suite, cal, evaluators).run(convs)
+        eng = summarize(results, gold, qs)
+        drift = drift_report(results)
         table = [["**engine**", *[f"{100 * eng['acc'][q]:.1f}" for q in qs], f"**{100 * eng['mean_acc']:.1f}**", "",
                   f"{eng['usd_per_1M_conv']:.1f}", f"{eng['ms_per_conv']:.0f}", f"{100 * eng['llm_share']:.0f}%"]]
         baselines = {}
@@ -89,9 +91,12 @@ def evaluate(name, suite, calib_convs, tests, client, rows, md):
                           f"{100 * lo:+.1f} … {100 * hi:+.1f}", f"{b['usd_per_1M_conv']:.1f}",
                           f"{b['ms_per_conv']:.0f}", f"{100 * b['llm_share']:.0f}%"])
         md.append(f"\n**{test_name}** ({len(convs)} conversations)\n")
+        if drift:
+            md.append("Drift monitor (agreement of routed decisions with the audit judge on the audited sample): "
+                      + ", ".join(f"{q} {100 * d['agreement']:.0f}% (n={d['n']})" for q, d in drift.items()) + "\n")
         md.append(tabulate(table, ["", *qs, "mean %", "engine − this (95% CI, points)", "$ / 1M conv", "ms / conv",
                                    "conv. sent to an LLM"], tablefmt="github"))
-        rows.append({"run": name, "test": test_name, "engine": {k: v for k, v in eng.items() if k != "per_conv"},
+        rows.append({"run": name, "test": test_name, "drift": drift, "engine": {k: v for k, v in eng.items() if k != "per_conv"},
                      "baselines": {k: {kk: vv for kk, vv in v.items() if kk != "per_conv"} for k, v in baselines.items()},
                      "routes": cal["routes"]})
 
@@ -108,6 +113,7 @@ def main():
     rows, md = [], ["# Engine evaluation\n", f"Suite: `{SUITE.name}`. Targets and tolerance from the suite policy."]
 
     hosted = Suite.load(SUITE)
+    hosted.policy.audit_rate = 0.10  # larger audit sample than production (2%) so drift is measurable here
     evaluate("hosted", hosted, a_dev, {"A-test": a_test, "B (unseen generator)": b}, client, rows, md)
     evaluate("hosted + 100 B labels", hosted, a_dev + b_cal, {"B-rest": b_rest}, client, rows, md)
     local = Suite.load(SUITE)
