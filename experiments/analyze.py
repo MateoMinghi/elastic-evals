@@ -151,6 +151,7 @@ def distill(task, table):
 
 LAYER_NAMES = {"rules": "rules", "jev": "Jev", "e5_logreg": "e5+logreg", "nli_zeroshot": "mDeBERTa zero-shot",
                "pi_deberta": "ProtectAI injection", "llm_ds": "LLM DeepSeek-V4.1-Flash", "llm_nano": "LLM GPT-4.1-nano",
+               "llm_luna": "LLM GPT-6 Luna", "llm_haiku": "LLM Claude Haiku 5.5",
                "e5_logreg_goldpool": "e5+logreg (600 human labels)", "e5_distilled": "e5+logreg distilled from LLM"}
 
 
