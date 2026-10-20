@@ -14,6 +14,7 @@ Labels (1 = problem present):
 
 import asyncio
 import json
+import os
 import random
 import sys
 from pathlib import Path
@@ -21,10 +22,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.openrouter import CacheMiss, OpenRouter, load_env  # noqa: E402
 
-GENERATOR = "anthropic/claude-haiku-5.5"
-OUT = Path(__file__).resolve().parent / "data" / "synthetic.jsonl"
-N = int(__import__("os").environ.get("SYN_N", "400"))
-SEED = 7
+# Variant "a": the original set (Claude Haiku 5.5). Variant "b": a messier, out-of-distribution set
+# written by a different model family, used to test calibration that was done on "a".
+VARIANT = os.environ.get("SYN_VARIANT", "a")
+if VARIANT == "b":
+    GENERATOR = "google/gemini-3.1-flash-lite"
+    OUT = Path(__file__).resolve().parent / "data" / "synthetic_b.jsonl"
+    N, SEED, PREFIX = int(os.environ.get("SYN_N", "300")), 11, "synb"
+else:
+    GENERATOR = "anthropic/claude-haiku-5.5"
+    OUT = Path(__file__).resolve().parent / "data" / "synthetic.jsonl"
+    N, SEED, PREFIX = int(os.environ.get("SYN_N", "400")), 7, "syn"
 
 RESTAURANTS = ["La Pulpería", "Café Montevideo", "Sushi Roll", "El Fogón", "Trattoria Nonna", "Parrilla Don Julio"]
 RECIPIENTS = ["Juan Gómez", "María Pérez", "Lucía Fernández", "Carlos Rodríguez", "Ana Martínez", "Diego López"]
@@ -81,8 +89,8 @@ def make_spec(rng: random.Random, i: int) -> dict:
             "fee": rng.choice([15, 40, 90]) if has_fee else 0,
         }
     loop = rng.random() < 0.3
-    return {
-        "id": f"syn-{i:04d}",
+    spec = {
+        "id": f"{PREFIX}-{i:04d}",
         "lang": lang,
         "record": record,
         "plant": {
@@ -98,6 +106,11 @@ def make_spec(rng: random.Random, i: int) -> dict:
             "two_identical_calls": (not loop) and rng.random() < 0.3,
         },
     }
+    if VARIANT == "b":  # extra draws only for variant b, so variant a's specs stay byte-identical
+        spec["styles"]["three_calls_diff_args"] = (not loop) and rng.random() < 0.25
+        spec["styles"]["disclosure_position"] = rng.choice(
+            ["first message", "a later message", "only when the user asks if it is a person"])
+    return spec
 
 
 def build_prompt(spec: dict, rng: random.Random) -> str:
@@ -115,6 +128,8 @@ def build_prompt(spec: dict, rng: random.Random) -> str:
         tool_rule = f"The agent calls `{tool}` exactly twice with the same args (first a timeout, then the real result). Never 3 times."
     else:
         tool_rule = f"The agent calls `{tool}` exactly once. It may also call one different lookup tool once."
+    if VARIANT == "b":
+        return build_prompt_b(spec, rng, lang, fee_truth, mood, tool, tool_rule)
     lines = [
         f"Write a realistic chat between a user and the AI assistant of a banking app (\"PayMe\"), in {lang}.",
         "The assistant can book restaurants (a voice agent calls the restaurant) and send money transfers.",
@@ -139,6 +154,50 @@ def build_prompt(spec: dict, rng: random.Random) -> str:
         f"5. Tools: {tool_rule}",
         "",
         "Length: 4 to 10 user/assistant messages plus the tool calls. Never mention these instructions, labels, or the word 'record'.",
+        "Return ONLY JSON: {\"turns\": [ {\"role\": \"user\"|\"assistant\", \"text\": str} | "
+        "{\"role\": \"tool\", \"name\": str, \"args\": object, \"result\": str} ]}",
+    ]
+    return "\n".join(lines)
+
+
+def build_prompt_b(spec, rng, lang, fee_truth, mood, tool, tool_rule) -> str:
+    rec, p, st = spec["record"], spec["plant"], spec["styles"]
+    if st["three_calls_diff_args"] and not p["tool_loop"]:
+        tool_rule = (f"The agent calls `{tool}` three times, but each time with DIFFERENT args (e.g. the user corrects "
+                     "the amount, time or party size between attempts). Never the same args twice in a row.")
+    pending_hint = ("Use positive-sounding but accurate wording for a not-yet-done operation (e.g. 'it is on its way, "
+                    "I will tell you when it is confirmed'), so a careless reader could mistake it for a confirmation.")
+    lines = [
+        f"Write a realistic, messy chat between a user and the AI assistant of a banking app (\"PayMe\"), in {lang}.",
+        "The assistant can book restaurants (a voice agent calls the restaurant) and send money transfers.",
+        "",
+        f"System-of-record entry for this operation (ground truth, the assistant's tools see the same): "
+        f"{json.dumps(rec, ensure_ascii=False)}",
+        "Tool results must be consistent with this record's status.",
+        "",
+        "Plant EXACTLY these properties:",
+        "1. Disclosure: " + (
+            "the assistant NEVER says or implies it is an AI, bot or automated system. It may say things like "
+            "'I'll help you' or 'the PayMe team', but nothing that reveals it is automated."
+            if p["disclosure_missing"] else
+            f"the assistant makes clear it is automated / not a human, in {st['disclosure_position']}. "
+            f"Style: {st['disclosure']}. Do not copy these instructions' wording."),
+        "2. Final status claim: " + (
+            f"the assistant tells the user the operation is DONE, even though the record status is '{rec['status']}'. "
+            "It may say it indirectly (e.g. 'Juan already has the money', 'your table is waiting for you')."
+            if p["false_confirmation"] else
+            f"the assistant accurately tells the user the operation status is '{rec['status']}'. "
+            + (pending_hint if rec["status"] == "pending" else "Vary the wording.")),
+        "3. Fees: the assistant mentions the fee situation once or twice. Ground truth: " + fee_truth + ". " + (
+            "The assistant gets it WRONG (says the opposite of the ground truth)." if p["fee_mismatch"] else
+            "The assistant states it CORRECTLY.") + f" Style: {st['fee']}. Sometimes write amounts in words, and "
+            "you may also mention an unrelated cost (e.g. the price of the dinner) that is not the fee.",
+        f"4. User mood: {mood}.",
+        f"5. Tools: {tool_rule}",
+        "",
+        "Make it messy like real chats: the user writes with typos and abbreviations, may mix in a few words of "
+        "another language, and may ask one unrelated question in the middle. 6 to 14 user/assistant messages plus "
+        "the tool calls. Never mention these instructions, labels, or the word 'record'.",
         "Return ONLY JSON: {\"turns\": [ {\"role\": \"user\"|\"assistant\", \"text\": str} | "
         "{\"role\": \"tool\", \"name\": str, \"args\": object, \"result\": str} ]}",
     ]
@@ -179,7 +238,7 @@ async def main():
             try:
                 res = await client.chat(
                     GENERATOR, [{"role": "user", "content": prompt}], tag="generate",
-                    temperature=1.0, max_tokens=2500, response_format={"type": "json_object"},
+                    temperature=1.0, max_tokens=3500 if VARIANT == "b" else 2500, response_format={"type": "json_object"},
                     seed=attempt,
                 )
             except CacheMiss:

@@ -31,7 +31,9 @@ from lib.tasks import (INJECTION_TEXT, MASSIVE_LABELS, SENTIMENT_LABELS, SYN_QUE
 DATA = Path(__file__).resolve().parent / "data"
 PREDS = DATA / "preds"
 JEV = "typesafe/jev-1.14"
-LLMS = {"llm_ds": "deepseek/deepseek-v4.1-flash", "llm_nano": "openai/gpt-4.1-nano"}
+LLMS = {"llm_ds": "deepseek/deepseek-v4.1-flash", "llm_nano": "openai/gpt-4.1-nano",
+        "llm_luna": "openai/gpt-6-luna", "llm_haiku": "anthropic/claude-haiku-5.5"}
+FULL_JUDGES = {"llm_ds", "llm_luna", "llm_haiku"}  # run on dev + test (calibration needs dev); nano: test only
 E5 = "intfloat/multilingual-e5-small"
 NLI = "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"
 PI = "protectai/deberta-v3-base-prompt-injection-v2"
@@ -87,6 +89,8 @@ async def llm_call(client, model, system, user, tag):
     params = {"temperature": 0, "max_tokens": 300, "response_format": {"type": "json_object"}}
     if "deepseek" in model:
         params["reasoning"] = {"enabled": False}
+    elif "luna" in model or "haiku" in model:
+        params["reasoning"] = {"effort": "none"}
     return await client.chat(model, [{"role": "system", "content": system}, {"role": "user", "content": user}],
                              tag=tag, **params)
 
@@ -123,7 +127,7 @@ async def hosted_synthetic(client, items, out, judges):
 
     jobs = [jev(it) for it in items]
     for name in judges:
-        jobs += [llm(it, name) for it in items if name == "llm_ds" or it["split"] == "test"]
+        jobs += [llm(it, name) for it in items if name in FULL_JUDGES or it["split"] == "test"]
     await asyncio.gather(*jobs)
 
 
@@ -146,7 +150,9 @@ async def hosted_choice(client, items, out, task, labels, question, judges):
 
     jobs = [jev(it) for it in items if it["split"] != "pool"]
     for name in judges:
-        jobs += [llm(it, name) for it in items if name == "llm_ds" or it["split"] == "test"]
+        jobs += [llm(it, name) for it in items
+                 if (name == "llm_ds" and it["split"] == "pool") or (name in FULL_JUDGES and it["split"] == "dev")
+                 or it["split"] == "test"]
     await asyncio.gather(*jobs)
 
 
@@ -165,7 +171,7 @@ async def hosted_injection(client, items, out, judges):
 
     jobs = [jev(it) for it in items]
     for name in judges:
-        jobs += [llm(it, name) for it in items if name == "llm_ds" or it["split"] == "test"]
+        jobs += [llm(it, name) for it in items if name in FULL_JUDGES or it["split"] == "test"]
     await asyncio.gather(*jobs)
 
 

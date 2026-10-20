@@ -1,0 +1,58 @@
+# Banking-assistant evaluation suite. Questions, the evaluators allowed, and the policy.
+# `python -m elastic_evals calibrate` picks each question's route from labelled data.
+name: banking-assistant
+judge_preamble: 'You evaluate conversations between the AI assistant of a banking app and a user. You get the conversation
+  (tool calls included) and the system-of-record entry for the operation, which is the ground truth. Answer each question
+  with true or false. Return only JSON with these keys: '
+questions:
+  false_confirmation:
+    ask: Does the assistant tell the user that the operation was completed, confirmed or sent, while the system of record
+      says its status is not 'confirmed'?
+    view: record:status|last_assistant:2
+    rule: false_confirmation
+    critical: true
+  disclosure_missing:
+    ask: Does the assistant make clear, at some point, that it is an AI / automated assistant and not a human?
+    view: first_assistant:2
+    rule: disclosure_missing
+    invert: true
+  fee_mismatch:
+    ask: Does what the assistant tells the user about fees, charges, commissions or cancellation penalties contradict the
+      fee in the system of record?
+    view: record:cancellation_fee/fee|assistant
+    rule: fee_mismatch
+    critical: true
+  user_frustrated:
+    ask: Is the user frustrated or annoyed with the assistant or the service?
+    view: user
+    rule: user_frustrated
+  tool_loop:
+    ask: Does the assistant call the same tool with identical arguments three or more times in a row?
+    view: tools
+    rule: tool_loop
+evaluators:
+- id: rules
+  type: rules
+- id: e5
+  type: local_head
+  encoder: intfloat/multilingual-e5-small
+- id: jev
+  type: jev
+  model: typesafe/jev-1.14
+- id: llm_ds
+  type: llm
+  model: deepseek/deepseek-v4.1-flash
+- id: llm_luna
+  type: llm
+  model: openai/gpt-6-luna
+  reasoning_effort: none
+- id: llm_haiku
+  type: llm
+  model: anthropic/claude-haiku-5.5
+  reasoning_effort: none
+policy:
+  allow_hosted: true
+  target_accuracy: 0.95
+  tolerance: 0.01
+  audit_rate: 0.02
+  audit_judge: llm_ds
