@@ -90,8 +90,8 @@ def test_expected_values(ee):
 """)
     report = pytester.path / "run.json"
     # installed packages register the plugin through the pytest11 entry point; otherwise load it explicitly
-    load = [] if pytestconfig.pluginmanager.has_plugin("elastic_evals") else ["-p", "elastic_evals.pytest_plugin"]
-    res = pytester.runpytest(*load, f"--ee-report={report}")
+    plugin_args = [] if pytestconfig.pluginmanager.has_plugin("elastic_evals") else ["-p", "elastic_evals.pytest_plugin"]
+    res = pytester.runpytest(*plugin_args, f"--ee-report={report}")
     res.assert_outcomes(passed=2, failed=1)
     res.stdout.fnmatch_lines(["*critical check 'false_confirmation' flagged*", "*elastic-evals*", "*gate false_confirmation*FAIL*"])
     run = json.loads(report.read_text())
