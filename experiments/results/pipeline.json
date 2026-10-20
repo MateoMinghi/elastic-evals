@@ -1,0 +1,239 @@
+{
+ "calibration": "cal_20261020174921_a0fd62c4",
+ "hosted": [
+  "jev",
+  "llm_haiku"
+ ],
+ "routes": {
+  "false_confirmation": [
+   "rules",
+   "e5",
+   "jev",
+   "llm_haiku"
+  ],
+  "disclosure_missing": [
+   "rules"
+  ],
+  "fee_mismatch": [
+   "jev",
+   "llm_haiku"
+  ],
+  "user_frustrated": [
+   "e5",
+   "jev",
+   "llm_haiku"
+  ],
+  "tool_loop": [
+   "rules"
+  ]
+ },
+ "conversations": 300,
+ "evaluated": 300,
+ "errors": [],
+ "spans": 4149,
+ "obs_docs": 4149,
+ "stage_docs": 4149,
+ "payload_docs": 3903,
+ "score_docs": 2823,
+ "accuracy": {
+  "false_confirmation": 0.9433333333333334,
+  "disclosure_missing": 0.9933333333333333,
+  "fee_mismatch": 0.9333333333333333,
+  "user_frustrated": 0.8066666666666666,
+  "tool_loop": 1.0
+ },
+ "mean_accuracy": 0.9353333333333333,
+ "engine_study_accuracy": {
+  "false_confirmation": 94.3,
+  "disclosure_missing": 99.3,
+  "fee_mismatch": 93.3,
+  "user_frustrated": 80.7,
+  "tool_loop": 100.0
+ },
+ "usd_per_1M_conv": 84.61081,
+ "sent_to_llm": 0.36333333333333334,
+ "sent_to_hosted": 1.0,
+ "content_kept": 280,
+ "retention_reasons": {
+  "flagged": 276,
+  "low_confidence": 121,
+  "tier0_failure": 173,
+  "error": 16,
+  "random": 1,
+  "audit": 3
+ },
+ "replay_s": 0.8537323474884033,
+ "ingest_s": 3.4915127754211426,
+ "evaluate_s": 49.020742893218994,
+ "drift": {
+  "calibration_id": "cal_20261020174921_a0fd62c4",
+  "agreement": {
+   "disclosure_missing": {
+    "n": 3,
+    "agreement": 1.0
+   },
+   "tool_loop": {
+    "n": 3,
+    "agreement": 1.0
+   },
+   "user_frustrated": {
+    "n": 3,
+    "agreement": 0.6666666666666666
+   },
+   "false_confirmation": {
+    "n": 3,
+    "agreement": 1.0
+   },
+   "fee_mismatch": {
+    "n": 3,
+    "agreement": 1.0
+   }
+  },
+  "by_lang": {
+   "disclosure_missing/es": {
+    "n": 1,
+    "agreement": 1.0
+   },
+   "tool_loop/es": {
+    "n": 1,
+    "agreement": 1.0
+   },
+   "user_frustrated/es": {
+    "n": 1,
+    "agreement": 0.0
+   },
+   "false_confirmation/es": {
+    "n": 1,
+    "agreement": 1.0
+   },
+   "fee_mismatch/es": {
+    "n": 1,
+    "agreement": 1.0
+   },
+   "false_confirmation/en": {
+    "n": 2,
+    "agreement": 1.0
+   },
+   "disclosure_missing/en": {
+    "n": 2,
+    "agreement": 1.0
+   },
+   "tool_loop/en": {
+    "n": 2,
+    "agreement": 1.0
+   },
+   "fee_mismatch/en": {
+    "n": 2,
+    "agreement": 1.0
+   },
+   "user_frustrated/en": {
+    "n": 2,
+    "agreement": 1.0
+   }
+  },
+  "baseline": {
+   "tool_loop": {
+    "n": 158,
+    "by_lang": {
+     "en": {
+      "n": 79,
+      "agreement": 1.0
+     },
+     "es": {
+      "n": 79,
+      "agreement": 1.0
+     }
+    },
+    "agreement": 1.0
+   },
+   "fee_mismatch": {
+    "n": 158,
+    "by_lang": {
+     "en": {
+      "n": 79,
+      "agreement": 0.9873417721518988
+     },
+     "es": {
+      "n": 79,
+      "agreement": 0.9873417721518988
+     }
+    },
+    "agreement": 0.9873417721518988
+   },
+   "user_frustrated": {
+    "n": 158,
+    "by_lang": {
+     "en": {
+      "n": 79,
+      "agreement": 0.9367088607594937
+     },
+     "es": {
+      "n": 79,
+      "agreement": 0.8227848101265823
+     }
+    },
+    "agreement": 0.879746835443038
+   },
+   "disclosure_missing": {
+    "n": 158,
+    "by_lang": {
+     "en": {
+      "n": 79,
+      "agreement": 1.0
+     },
+     "es": {
+      "n": 79,
+      "agreement": 1.0
+     }
+    },
+    "agreement": 1.0
+   },
+   "false_confirmation": {
+    "n": 158,
+    "by_lang": {
+     "en": {
+      "n": 79,
+      "agreement": 0.9746835443037974
+     },
+     "es": {
+      "n": 79,
+      "agreement": 1.0
+     }
+    },
+    "agreement": 0.9873417721518988
+   }
+  },
+  "disagreements": 1,
+  "queued_for_annotation": 0
+ },
+ "indices_kb": {
+  "e2e-metrics-shared-000001": [
+   30,
+   "11"
+  ],
+  "e2e-traces-shared-000001": [
+   300,
+   "232"
+  ],
+  "e2e-embeddings-shared-000001": [
+   0,
+   "0"
+  ],
+  "e2e-payload-shared-000001": [
+   3903,
+   "1594"
+  ],
+  "e2e-obs-shared-000001": [
+   4149,
+   "1653"
+  ],
+  "e2e-stage-shared-000001": [
+   4149,
+   "1549"
+  ],
+  "e2e-scores-shared-000001": [
+   2823,
+   "1097"
+  ]
+ }
+}

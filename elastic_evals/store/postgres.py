@@ -7,32 +7,33 @@ from importlib import resources
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
 
 
 class Postgres:
-    def __init__(self, dsn: str | None = None):
-        self.dsn = dsn or os.environ.get("EE_POSTGRES_DSN", "postgresql://postgres@localhost:5432/elastic_evals")
-        self._conn = None
+    """Thread-safe: every call borrows a connection from a small pool (API requests run in threads)."""
 
-    @property
-    def conn(self):
-        if self._conn is None or self._conn.closed:
-            self._conn = psycopg.connect(self.dsn, autocommit=True, row_factory=dict_row)
-        return self._conn
+    def __init__(self, dsn: str | None = None, max_size: int = 10):
+        self.dsn = dsn or os.environ.get("EE_POSTGRES_DSN", "postgresql://postgres@localhost:5432/elastic_evals")
+        self.pool = ConnectionPool(self.dsn, min_size=1, max_size=max_size, open=True,
+                                   kwargs={"autocommit": True, "row_factory": dict_row})
 
     @contextmanager
     def tx(self):
-        with self.conn.transaction():
-            yield self.conn
+        with self.pool.connection() as conn, conn.transaction():
+            yield conn
 
     def all(self, sql: str, *params):
-        return self.conn.execute(sql, params).fetchall()
+        with self.pool.connection() as conn:
+            return conn.execute(sql, params).fetchall()
 
     def one(self, sql: str, *params):
-        return self.conn.execute(sql, params).fetchone()
+        with self.pool.connection() as conn:
+            return conn.execute(sql, params).fetchone()
 
     def exec(self, sql: str, *params) -> int:
-        return self.conn.execute(sql, params).rowcount
+        with self.pool.connection() as conn:
+            return conn.execute(sql, params).rowcount
 
     def migrate(self):
         """Apply schema/NNN_*.sql files in order, once each."""
@@ -51,8 +52,7 @@ class Postgres:
                   tenant_id, actor, action, target, Jsonb(detail))
 
     def close(self):
-        if self._conn is not None:
-            self._conn.close()
+        self.pool.close()
 
 
 def create_database(dsn: str):

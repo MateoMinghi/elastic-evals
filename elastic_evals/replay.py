@@ -33,9 +33,10 @@ def tracer_provider(endpoint: str, tenant: str, service: str = "demo-agent", env
     resource = Resource.create({"service.name": service, "deployment.environment.name": environment,
                                 "ee.tenant_id": tenant})
     provider = TracerProvider(resource=resource)
+    # the SDK drops spans silently once its queue is full (default 2048): size it for bursts
     provider.add_span_processor(BatchSpanProcessor(
         OTLPSpanExporter(endpoint=endpoint.rstrip("/") + "/v1/traces", headers=headers or {}),
-        max_export_batch_size=512, schedule_delay_millis=200))
+        max_queue_size=65536, max_export_batch_size=512, schedule_delay_millis=200))
     return provider
 
 
@@ -121,6 +122,8 @@ def replay(convs, endpoint: str, tenant: str, agent: str = "bank-assistant", rat
     spans, t0 = 0, time.time()
     for i, conv in enumerate(convs):
         spans += emit(tracer, conv, agent=agent)
+        if (i + 1) % 200 == 0:
+            provider.force_flush()
         if rate:
             ahead = (i + 1) / rate - (time.time() - t0)
             if ahead > 0:

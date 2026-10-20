@@ -27,14 +27,14 @@ def unit_hash(key: str) -> float:
 
 
 class Engine:
-    def __init__(self, suite, calibration, evaluators):
+    def __init__(self, suite, calibration, evaluators, audit: bool = True):
         self.suite, self.cal = suite, calibration
         self.routes = calibration["routes"]
         self.th = {q: {e: tuple(t) if t else None for e, t in th.items()} for q, th in calibration["thresholds"].items()}
         self.strictness = calibration.get("suite_choice", {}).get("strictness", {})
         self.cal_id = calibration.get("id", "uncalibrated")
         used = {e for r in self.routes.values() for e in r}
-        audit = suite.policy.audit_judge if suite.policy.allow_hosted else None
+        audit = suite.policy.audit_judge if suite.policy.allow_hosted and audit else None
         self.evaluators = [e for e in evaluators if e.id in used]
         self.audit = next((e for e in evaluators if e.id == audit), None)
 

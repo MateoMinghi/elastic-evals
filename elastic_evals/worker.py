@@ -85,8 +85,10 @@ def fetch_conversation(os_: OpenSearch, tenant: str, conversation_id: str, kind:
                      pool, routing)
     if not spans:
         return [], []
-    stage = os_.hits("stage", {"query": {"bool": {"filter": filt}}, "size": 10000}, pool, routing)
-    return spans, stage
+    # staged content expires after a few days; content the retention decision kept lives in payload
+    content = os_.hits("payload", {"query": {"bool": {"filter": filt}}, "size": 10000}, pool, routing)
+    content += os_.hits("stage", {"query": {"bool": {"filter": filt}}, "size": 10000}, pool, routing)
+    return spans, list({d["span_id"]: d for d in content}.values())
 
 
 class Worker:
@@ -155,7 +157,8 @@ class Worker:
         for (tenant, cal_id, role), convs in groups.items():
             try:
                 suite, cal, evaluators = self.registry.engine(cal_id, self.client)
-                results = await Engine(suite, cal, evaluators).run_async(convs)
+                # a shadow candidate is scored but not served, and not audited twice
+                results = await Engine(suite, cal, evaluators, audit=(role == "active")).run_async(convs)
             except PolicyViolation as exc:
                 for c in convs:
                     outcomes[(tenant, c["id"])] = ("error", str(exc))

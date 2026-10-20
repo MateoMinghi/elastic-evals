@@ -24,7 +24,7 @@ local = ["sentence-transformers>=3"]
 service = [
   "fastapi>=0.110",
   "uvicorn>=0.29",
-  "psycopg[binary]>=3.1",
+  "psycopg[binary,pool]>=3.1",
   "aiokafka>=0.10",
 ]
 otel = ["opentelemetry-sdk>=1.25", "opentelemetry-exporter-otlp-proto-http>=1.25"]
