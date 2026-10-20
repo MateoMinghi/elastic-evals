@@ -112,8 +112,8 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
     def create_key(role: str = Body(..., embed=True), tenant: str | None = Body(None, embed=True),
                    c: Ctx = Depends(need("keys:write"))):
         tenant = tenant or c.tenant
-        if tenant != c.tenant and not c.allows("*:*"):
-            raise HTTPException(403, "cannot create keys for another tenant")
+        if (tenant != c.tenant or role == "platform") and not c.allows("tenants:write"):
+            raise HTTPException(403, "only the platform role creates keys for another tenant or platform keys")
         key_id, secret = f"ek_{secrets.token_hex(6)}", secrets.token_urlsafe(24)
         pg.exec("INSERT INTO api_keys (id, tenant_id, secret_hash, role_id) VALUES (%s, %s, %s, %s)",
                 key_id, tenant, hash_secret(secret), role)
@@ -535,7 +535,7 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
 
     @app.post("/v1/reprice")
     def reprice(frm: str = Body(..., alias="from", embed=True), to: str | None = Body(None, embed=True),
-                c: Ctx = Depends(need("prices:write"))):
+                c: Ctx = Depends(need("traces:write"))):
         from .pricing import PriceBook, reprice as run, rows_from_db
         out = run(os_, pool(c), c.tenant, PriceBook(rows_from_db(pg)), frm, to)
         pg.audit(c.actor, "reprice", None, c.tenant, since=frm, until=to, **out)

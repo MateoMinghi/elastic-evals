@@ -86,7 +86,7 @@ def deployment(opensearch, postgres, collectors, tmp_path_factory):
     app = create_app(postgres, opensearch, reg, auth=True, sentry_bridge=bridge)
     keys = {}
     for name, tenant, role in [("admin", "acme", "admin"), ("viewer", "acme", "viewer"), ("annot", "acme", "annotator"),
-                               ("other", "other", "admin")]:
+                               ("other", "other", "admin"), ("platform", "acme", "platform")]:
         secret = uuid.uuid4().hex
         postgres.exec("INSERT INTO api_keys (id, tenant_id, secret_hash, role_id) VALUES (%s, %s, %s, %s)",
                       f"k_{name}", tenant, hash_secret(secret), role)
@@ -107,6 +107,14 @@ def test_auth_scopes_and_isolation(deployment):
     cid = deployment["convs"][0]["id"]
     assert c.get(f"/v1/conversations/{cid}", headers=k["other"]).status_code == 404
     assert c.get(f"/v1/calibrations/{deployment['cal']['id']}", headers=k["other"]).status_code == 404
+    # a tenant admin administers its own tenant only; global scopes belong to the platform role
+    assert c.post("/v1/tenants", json={"id": "evil"}, headers=k["other"]).status_code == 403
+    assert c.post("/v1/api-keys", json={"role": "admin", "tenant": "acme"}, headers=k["other"]).status_code == 403
+    assert c.post("/v1/api-keys", json={"role": "platform"}, headers=k["other"]).status_code == 403
+    assert c.put("/v1/model-prices", json=[], headers=k["other"]).status_code == 403
+    assert c.post("/v1/api-keys", json={"role": "viewer"}, headers=k["other"]).json()["tenant"] == "other"
+    assert c.post("/v1/tenants", json={"id": "newco"}, headers=k["platform"]).status_code == 200
+    assert c.post("/v1/api-keys", json={"role": "admin", "tenant": "newco"}, headers=k["platform"]).json()["tenant"] == "newco"
 
 
 def test_list_search_and_detail(deployment):
@@ -274,7 +282,8 @@ def test_prices_export_and_reprice(deployment):
     before = c.get(f"/v1/conversations/{cid}", headers=k).json()["rollup"]
     assert before.get("cost_usd", 0) == 0  # the demo model had no price at ingest
     rows = [{"model_pattern": "^demo-model$", "start_date": "2020-01-01", "tiers": [{"input": 1.0, "output": 2.0}]}]
-    assert c.put("/v1/model-prices", json=rows, headers=k).json() == {"n": 1}
+    assert c.put("/v1/model-prices", json=rows, headers=k).status_code == 403  # the price book is global
+    assert c.put("/v1/model-prices", json=rows, headers=deployment["keys"]["platform"]).json() == {"n": 1}
     exported = c.get("/v1/model-prices/export", headers=k).json()
     assert exported[0]["model_pattern"] == "^demo-model$" and exported[0]["tiers"] == rows[0]["tiers"]
     out = c.post("/v1/reprice", json={"from": "2000-01-01"}, headers=k).json()

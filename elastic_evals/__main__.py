@@ -9,7 +9,7 @@ Engine (no services needed):
   gate        --suite S --data human_labelled.jsonl [--folds 5]           phase-1 gate (exit code 1 if not passed)
 
 Services (OpenSearch, Postgres, Kafka; see deploy/):
-  setup       [--pools shared] [--tenant acme --dedicated] [--admin-key] [--dashboards URL]
+  setup       [--pools shared] [--tenant acme --dedicated] [--admin-key] [--platform-key] [--dashboards URL]
                                                                             indices, templates, ISM, schema, saved objects
   serve       [--port 8000]                                                 API + UI
   presidio    [--port 3000]                                                 PII analyzer for the gateway
@@ -164,13 +164,14 @@ def cmd_setup(a):
         from .dashboards import import_objects
         res = import_objects(a.dashboards, os_.prefix)
         print(f"OpenSearch Dashboards: {res['successCount']} saved objects imported")
-    if a.admin_key and a.tenant:
-        import secrets
-        from .api import hash_secret
-        key_id, secret = f"ek_{secrets.token_hex(6)}", secrets.token_urlsafe(24)
-        pg.exec("INSERT INTO api_keys (id, tenant_id, secret_hash, role_id) VALUES (%s, %s, %s, 'admin')",
-                key_id, a.tenant, hash_secret(secret))
-        print(f"admin API key for {a.tenant}: {key_id}.{secret}")
+    for role, wanted in (("admin", a.admin_key), ("platform", a.platform_key)):
+        if wanted and a.tenant:
+            import secrets
+            from .api import hash_secret
+            key_id, secret = f"ek_{secrets.token_hex(6)}", secrets.token_urlsafe(24)
+            pg.exec("INSERT INTO api_keys (id, tenant_id, secret_hash, role_id) VALUES (%s, %s, %s, %s)",
+                    key_id, a.tenant, hash_secret(secret), role)
+            print(f"{role} API key for {a.tenant}: {key_id}.{secret}")
 
 
 def cmd_gate(a):
@@ -351,7 +352,9 @@ def main(argv=None):
     st.add_argument("--local-only", action="store_true")
     st.add_argument("--shards", type=int, default=1)
     st.add_argument("--replicas", type=int, default=0)
-    st.add_argument("--admin-key", action="store_true")
+    st.add_argument("--admin-key", action="store_true", help="print an admin key for --tenant (that tenant only)")
+    st.add_argument("--platform-key", action="store_true",
+                    help="print a platform key (operators: create tenants and their keys, the price book)")
     st.add_argument("--dashboards", default=os.environ.get("EE_DASHBOARDS_URL"),
                     help="OpenSearch Dashboards URL: import the saved objects")
     g = sub.add_parser("gate", help="phase-1 gate: cross-validated engine against the best single judge per check")

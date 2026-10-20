@@ -80,4 +80,4 @@ def test_postgres_schema(postgres):
     assert {"tenants", "suite_versions", "calibrations", "labels", "trace_tracker", "sentry_links",
             "annotation_items", "model_prices", "dataset_items", "experiment_runs", "audit_log"} <= names
     postgres.migrate()  # idempotent
-    assert postgres.one("SELECT count(*) AS n FROM roles")["n"] == 5
+    assert postgres.one("SELECT count(*) AS n FROM roles")["n"] == 6  # admin, engineer, annotator, viewer, ingest, platform
