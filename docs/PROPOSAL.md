@@ -19,7 +19,7 @@ It borrows Langfuse's concepts (data model, evaluator rules, datasets and experi
 - already operate OpenSearch, and
 - need per-tenant isolation (banks and other regulated customers).
 
-The inspiration is the "Observability, traces and evals" section of the PayMe agent architecture. That design used Langfuse for LLM traces and OpenSearch for operational telemetry. This project collapses the two into one OpenSearch-native system and builds the eval workflow ourselves.
+The inspiration is the "Observability, traces and evals" section of an internal agent architecture. That design used Langfuse for LLM traces and OpenSearch for operational telemetry. This project collapses the two into one OpenSearch-native system and builds the eval workflow ourselves.
 
 ## 2. Is the idea sound? Assessment
 
@@ -359,7 +359,7 @@ As a backstop, strip personal data at the Collector, keep `send_default_pii=fals
 - **Redact at ingest.** OpenSearch field masking is hash-only and breaks search, so redaction must happen at the Collector.
 - **GDPR deletion:** per-tenant time-based indices plus `delete_by_query` for a single user (another reason not to use data streams). Payloads have short retention.
 - **Audit:** audit logs from the OpenSearch security plugin, plus our own API audit log in Postgres. RBAC, retention, audit and masking are all in the open-source core.
-- **Eval datasets built from real conversations** need per-tenant consent and stay separated by tenant (a rule carried over from PayMe).
+- **Eval datasets built from real conversations** need per-tenant consent and stay separated by tenant.
 
 ## 11. UI scope (v1)
 
@@ -376,7 +376,7 @@ Operational dashboards (latency, cost, error rate) are saved objects in OpenSear
 
 | Area | Pick | Why |
 |---|---|---|
-| SDK, evaluators, API | Python (FastAPI, Pydantic) | ML and evaluator ecosystem; matches PayMe's engine stack |
+| SDK, evaluators, API | Python (FastAPI, Pydantic) | ML and evaluator ecosystem; the usual stack for agent engines |
 | Ingest workers | Python first; Go if profiling demands it | One language to start |
 | Collector | Upstream `otelcol-contrib` with config we ship | `loadbalancing`, `tail_sampling`, `redaction`, `transform` processors |
 | Queue | Kafka (Redpanda for small installs) | Replay, multiple consumers, backpressure |

@@ -1,6 +1,7 @@
 {
   "name": "elastic-evals-ui",
   "private": true,
+  "license": "Apache-2.0",
   "version": "0.3.0",
   "type": "module",
   "scripts": {

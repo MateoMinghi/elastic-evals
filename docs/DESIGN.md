@@ -597,7 +597,7 @@ The part Langfuse gives away for free, and the part we must build. Five screens;
 | CLI, SDK, pytest plugin | **Python** | Evaluator authors expect Python (DeepEval, Ragas, Inspect, pytest). Agents need no SDK from us: they emit OTel |
 | Embeddings and local heads at serving time | **Off the shelf**: Hugging Face `text-embeddings-inference` or ONNX Runtime | Fast serving without writing Rust ourselves |
 | Hosted evaluators | OpenRouter (chat + Decisions API) or direct provider APIs | Cached, budget-capped client; pinned model versions |
-| UI | **TypeScript** + React | Standard; the PayMe team already works in TypeScript |
+| UI | **TypeScript** + React | Standard; the common choice for web UIs, and the one most contributors already know |
 | Queue | Kafka (Redpanda for small installs) | |
 | Event store / config store / blobs | OpenSearch 3.x / Postgres / S3-compatible | §5.3, §5.4 |
 | Deployment | Docker Compose for development; Helm for production | |

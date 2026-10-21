@@ -9,7 +9,9 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function shot(page: import("@playwright/test").Page, name: string) {
-  if (shots) await page.screenshot({ path: `${shots}/${name}.png`, fullPage: true });
+  if (!shots) return;
+  await page.setViewportSize({ width: 1280, height: 860 });
+  await page.screenshot({ path: `${shots}/${name}.png` });
 }
 
 test("conversations: list, facets, search, viewer", async ({ page }) => {
@@ -45,8 +47,8 @@ test("experiments: compare two runs", async ({ page }) => {
   await page.goto("/experiments");
   const rows = page.locator("tbody tr");
   await expect(rows.nth(1)).toBeVisible();
+  await rows.nth(1).click(); // the older run is A, the newer is B
   await rows.nth(0).click();
-  await rows.nth(1).click();
   await expect(page.getByRole("heading", { name: "Comparison" })).toBeVisible();
   await shot(page, "5-experiments");
 });

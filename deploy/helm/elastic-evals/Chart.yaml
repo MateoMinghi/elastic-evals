@@ -4,3 +4,8 @@ description: Observability and calibrated evaluation for production AI agents, o
 type: application
 version: 0.3.0
 appVersion: "0.3.0"
+home: https://github.com/MateoMinghi/elastic-evals
+sources:
+  - https://github.com/MateoMinghi/elastic-evals
+annotations:
+  license: Apache-2.0
