@@ -3,6 +3,7 @@ package eeprocessor
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/collector/client"
@@ -174,5 +175,36 @@ func TestNormalizeOpenLLMetryAndLangfuse(t *testing.T) {
 	c := attrsOf(out, 2)
 	if c["ee.semconv.source"] != "genai" || c["gen_ai.input.messages"] != `[{"role":"user","parts":[]}]` {
 		t.Fatalf("native gen_ai must win: %v", c)
+	}
+}
+
+func TestNormalizeOpenInferenceAgentTurn(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	out := run(t, cfg, context.Background(), newTraces(map[string]string{"ee.tenant_id": "acme"}, map[string]any{
+		"openinference.span.kind": "AGENT", "session.id": "s-1",
+		"input.value": "Book me a flight to Lisbon", "output.value": "Booked: AF123, 120 EUR",
+	}, map[string]any{
+		"openinference.span.kind": "AGENT", "input.value": `{"messages": []}`, "output.value": "ok", "output.mime_type": "text/plain",
+	}, map[string]any{
+		"openinference.span.kind":            "LLM",
+		"llm.output_messages.0.message.role": "assistant", // a tool-call-only message: no text
+	}))
+	a := attrsOf(out, 0)
+	var in, outMsgs []Message
+	_ = json.Unmarshal([]byte(a["gen_ai.input.messages"].(string)), &in)
+	_ = json.Unmarshal([]byte(a["gen_ai.output.messages"].(string)), &outMsgs)
+	if len(in) != 1 || in[0].Role != "user" || in[0].Parts[0].Content != "Book me a flight to Lisbon" ||
+		len(outMsgs) != 1 || outMsgs[0].Role != "assistant" {
+		t.Fatalf("agent turn: %v %v", in, outMsgs)
+	}
+	b := attrsOf(out, 1)
+	if _, ok := b["gen_ai.input.messages"]; ok {
+		t.Fatalf("JSON input.value must not become a user message: %v", b["gen_ai.input.messages"])
+	}
+	if b["gen_ai.output.messages"] == nil {
+		t.Fatalf("text/plain output.value should become the assistant message")
+	}
+	if got := attrsOf(out, 2)["gen_ai.output.messages"].(string); !strings.Contains(got, `"parts":[]`) {
+		t.Fatalf("parts must be [] not null: %s", got)
 	}
 }

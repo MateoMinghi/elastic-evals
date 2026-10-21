@@ -254,10 +254,23 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
 
     # 1. every chain per question, and each question's floors (overall and per required language)
     rows, floors, lang_floors = {}, {}, {}
+    warnings = []
     for q in questions:
         usable = [e for e in evaluators if any((c["id"], q.name) in preds[e.id] for c in convs)]
         rows[q.name] = []
-        for ch in chains(usable, q):
+        ys = [labels[(c["id"], q.name)] for c in convs if (c["id"], q.name) in labels]
+        fewest = min((ys.count(v) for v in set(ys)), default=0) if len(set(ys)) > 1 else 0
+        candidates = list(chains(usable, q))
+        if fewest < policy.min_class_examples:
+            warnings.append(f"{q.name}: only {fewest} labelled examples of its rarest class (policy.min_class_examples "
+                            f"is {policy.min_class_examples}); route accuracy is uncertain, label more")
+            if q.critical:  # a head fitted on a handful of positives must not clear a critical check
+                kept = [ch for ch in candidates if not any(e.rank == 1 for e in ch)]
+                if kept:
+                    candidates = kept
+                    warnings.append(f"{q.name}: critical, so local heads are kept out of its route until it has "
+                                    f"{policy.min_class_examples} labels per class")
+        for ch in candidates:
             for lv in (levels if len(ch) > 1 else levels[:1]):
                 r = simulate(ch, q, convs, labels, preds, cost, lat, judge_th[lv])
                 rows[q.name].append((ch, dict(r, strictness=lv)))
@@ -328,8 +341,19 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
     # baseline for the drift monitor: how often the chosen routes agree with the audit judge on the
     # labelled set; live agreement on the audit sample is compared with this (DESIGN.md §6.7)
     audit_agreement = {}
-    if policy.audit_judge and policy.audit_judge in preds:
-        auditor = next(e for e in evaluators if e.id == policy.audit_judge)
+    rank = {e.id: e.rank for e in evaluators}
+    audit_judge = policy.audit_judge
+    routed_judges = {e for r in routes.values() for e in r if rank.get(e, 0) >= 3}
+    if audit_judge in routed_judges:  # §6.4: the auditor must be independent of the routes it audits
+        others = [e.id for e in evaluators if e.rank >= 3 and e.id not in routed_judges and e.id in preds]
+        if others:
+            warnings.append(f"audit judge {audit_judge} also decides routes; auditing with {others[0]} instead")
+            audit_judge = others[0]
+        else:
+            warnings.append(f"audit judge {audit_judge} also decides routes and no other judge is allowed: "
+                            "drift checks would compare it with itself; add another judge to the suite")
+    if audit_judge and audit_judge in preds:
+        auditor = next(e for e in evaluators if e.id == audit_judge)
         by_id = {e.id: e for e in evaluators}
         for q in questions:
             chain = [by_id[e] for e in routes[q.name]]
@@ -364,7 +388,9 @@ async def calibrate_async(suite: Suite, convs, labels, client: OpenRouter | None
         "thresholds": thresholds,
         "suite_choice": {k: v for k, v in choice.items() if k not in ("routes", "thresholds")},
         "budget_met": choice["budget_overrun"] == 0,
+        "audit_judge": audit_judge,
         "audit_agreement": audit_agreement,
+        "warnings": warnings,
         "configs": sorted(({k: v for k, v in c.items() if k not in ("routes", "thresholds")} for c in configs),
                           key=lambda c: (c["budget_overrun"] > 0, c["short"], c["usd_per_conv"])),
         "report": report,

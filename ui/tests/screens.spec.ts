@@ -66,3 +66,10 @@ test("annotation with the keyboard", async ({ page }) => {
   await expect(page.getByText("1 labelled this session")).toBeVisible();
   await expect(page.locator(".small.muted").first()).not.toHaveText(first || "");
 });
+
+test("unknown routes say so instead of rendering a blank page", async ({ page }) => {
+  await page.goto("/annotation");
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  await page.getByRole("link", { name: "Annotation" }).last().click();
+  await expect(page.getByRole("heading", { name: "Annotation" })).toBeVisible();
+});

@@ -40,11 +40,12 @@ export function Annotate() {
         labels, lang: item.conversation?.lang,
       });
       setDone((d) => d + 1);
+      queues.reload(); // keep the pending count in the header current
       next();
     } catch (e) {
       setError(String(e));
     }
-  }, [item, labels, checks, qid, next]);
+  }, [item, labels, checks, qid, next, queues]);
 
   const skip = useCallback(async () => {
     if (!item) return;

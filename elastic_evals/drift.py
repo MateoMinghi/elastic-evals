@@ -115,9 +115,11 @@ def compare_shadow(os_: OpenSearch, registry: Registry, tenant: str, suite_id: s
     cand, _, _ = agreement(os_, pool, tenant, active["id"], since, ("candidate",), shadow["id"])
     checks = sorted(set(act) | set(cand))
     rows = {c: {"active": act.get(c), "candidate": cand.get(c)} for c in checks}
-    enough = all((r["candidate"] or {}).get("n", 0) >= min_n for r in rows.values())
+    enough = bool(rows) and all((r["candidate"] or {}).get("n", 0) >= min_n for r in rows.values())  # no rows: no data yet
     better = all((r["candidate"] or {}).get("agreement", 0) >= (r["active"] or {}).get("agreement", 0) - 1e-9
                  for r in rows.values())
     return {"active": active["id"], "candidate": shadow["id"], "checks": rows, "enough_data": enough,
             "promote": bool(rows) and enough and better,
-            "candidate_agreement": {c: r["candidate"]["agreement"] for c, r in rows.items() if r["candidate"]}}
+            "candidate_agreement": {c: r["candidate"]["agreement"] for c, r in rows.items() if r["candidate"]},
+            "needed": f"at least {min_n} audited conversations per check scored by both calibrations in the last "
+                      f"{window_days:g} days (the audit rate is policy.audit_rate)"}

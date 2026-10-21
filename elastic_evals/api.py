@@ -176,6 +176,22 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
                                                                           {"term": {"conversation_id": cid}}]}}}, pool(c))
         return max(hits, key=lambda h: h.get("updated_at", "")) if hits else None
 
+    @app.post("/v1/conversations/rescore")
+    def rescore(conversation_ids: list[str] | None = Body(None, embed=True), frm: str | None = Body(None, alias="from", embed=True),
+                to: str | None = Body(None, embed=True), c: Ctx = Depends(need("scores:write"))):
+        """Send stored conversations back to the workers, e.g. those ingested before a calibration was
+        active. They are scored again under the active calibration; earlier scores stay, by version."""
+        if not (conversation_ids or frm):
+            raise HTTPException(422, "give conversation_ids or a from date")
+        n = pg.exec("""UPDATE trace_tracker SET status='open', due_at=now(), attempts=0, last_error=NULL
+                       WHERE tenant_id=%s AND status IN ('evaluated', 'error')
+                         AND (%s::text[] IS NULL OR conversation_id = ANY(%s::text[]))
+                         AND (%s::timestamptz IS NULL OR first_seen >= %s::timestamptz)
+                         AND (%s::timestamptz IS NULL OR first_seen <= %s::timestamptz)""",
+                    c.tenant, conversation_ids, conversation_ids, frm, frm, to, to)
+        pg.audit(c.actor, "conversations.rescore", None, c.tenant, n=n, since=frm, until=to)
+        return {"reopened": n}
+
     @app.get("/v1/conversations/{cid}")
     def get_conversation(cid: str, c: Ctx = Depends(need("traces:read"))):
         rollup = _rollup(c, cid)
@@ -293,7 +309,12 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
     @app.put("/v1/suites/{suite_id}")
     def put_suite(suite_id: str, yaml: str = Body(..., embed=True), agent_name: str | None = Body(None, embed=True),
                   c: Ctx = Depends(need("suites:write"))):
+        from .suite import Suite
+        from .suite_policy import problems
         try:
+            bad = problems(Suite.from_yaml(yaml))  # tenant-supplied: the workers will run it
+            if bad:
+                raise HTTPException(422, {"message": "suite not allowed", "problems": bad})
             version = reg.put_suite(c.tenant, suite_id, yaml, agent_name)
         except (ValueError, TypeError, KeyError) as exc:
             raise HTTPException(422, f"invalid suite: {exc}") from exc
@@ -313,7 +334,7 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
         row = reg.calibration(cal_id)
         if row["tenant_id"] != c.tenant:
             raise HTTPException(404, "calibration not found")
-        return row
+        return {k: v for k, v in row.items() if k != "artifact_uri"}  # a storage path is the operator's business
 
     @app.post("/v1/suites/{suite_id}/calibrations")
     def start_calibration(suite_id: str, label_set_id: str = Body(..., embed=True), local_only: bool = Body(False, embed=True),
@@ -387,8 +408,12 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
     # -- labels and annotation -------------------------------------------------------------------
     @app.post("/v1/annotation-queues")
     def create_queue(suite_id: str = Body(...), name: str = Body(...), checks: list[str] = Body(...),
-                     fill_rules: list[dict] = Body([]), c: Ctx = Depends(need("annotations:write"))):
-        return annotation.create_queue(pg, c.tenant, suite_id, name, checks, fill_rules)
+                     fill_rules: list[dict] = Body([]), label_set_id: str | None = Body(None),
+                     c: Ctx = Depends(need("annotations:write"))):
+        try:
+            return annotation.create_queue(pg, c.tenant, suite_id, name, checks, fill_rules, label_set_id)
+        except KeyError as exc:
+            raise HTTPException(404, "label set not found for this suite") from exc
 
     @app.get("/v1/annotation-queues")
     def list_queues(c: Ctx = Depends(need("annotations:read"))):
@@ -428,6 +453,18 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         return {"ok": True}
+
+    @app.get("/v1/annotation-queues/{qid}/items")
+    def list_items(qid: str, status: str | None = None, limit: int = Query(500, le=5000),
+                   c: Ctx = Depends(need("annotations:read"))):
+        _queue(qid, c)
+        return annotation.items(pg, qid, status, limit)
+
+    @app.post("/v1/annotation-queues/{qid}/items/{cid}/release")
+    def release(qid: str, cid: str, c: Ctx = Depends(need("annotations:write"))):
+        """Unlock an item someone left mid-labelling (locks also expire after 15 minutes)."""
+        _queue(qid, c)
+        return {"released": annotation.release(pg, qid, cid)}
 
     @app.post("/v1/annotation-queues/{qid}/items/{cid}/skip")
     def skip(qid: str, cid: str, c: Ctx = Depends(need("annotations:write"))):

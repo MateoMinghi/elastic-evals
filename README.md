@@ -20,7 +20,7 @@ v0.2 implements the design end to end; see [DESIGN.md §14](docs/DESIGN.md#14-im
 | Single-node storage footprint and query latency | [LOAD.md](experiments/results/LOAD.md) |
 | No span lost when a cluster node dies mid-ingest; rollover by size | [CLUSTER.md](experiments/results/CLUSTER.md) |
 
-Everything in the design is built. Not yet proven: real traffic with human labels (run `python -m elastic_evals gate` on it: the phase-1 gate), OpenSearch at billions of spans, a live Sentry installation. On the synthetic holdout the gate passes with `crossfit_folds: 5` and `floor_se: 0.5` ([GATE_PHASE1.md](experiments/results/GATE_PHASE1.md)).
+Everything in the design is built. Roadmap gates 2–5 have passed, including a load test at 2.5× the target peak ([PHASE2.md](experiments/results/PHASE2.md)) and the Sentry bridge against a self-hosted Sentry ([SENTRY_POC.md](experiments/results/SENTRY_POC.md)). Still open: phase 1 on real human-labelled traffic (it passes on the synthetic holdout, [GATE_PHASE1.md](experiments/results/GATE_PHASE1.md)) and phase 6, a first external tenant (an onboarding dry run passed: [TENANT_DRYRUN.md](experiments/results/TENANT_DRYRUN.md)).
 
 Beyond the cascade: trajectory and per-step (observation) checks, Presidio redaction at the gateway, S3 offload of very large content, re-pricing of stored spans, OpenSearch Dashboards saved objects, Hugging Face classifier and zero-shot evaluator adapters.
 
@@ -35,6 +35,18 @@ Beyond the cascade: trajectory and per-step (observation) checks, Presidio redac
 | `examples/` | A suite (`banking_suite.yaml`) and a synthetic test-set spec (`banking_synth.yaml`) |
 | `experiments/` | The studies behind the design, with their data and results |
 | `tests/` | Offline tests and integration tests against real OpenSearch, Postgres, Kafka and collectors |
+
+## Onboarding a team (tenants)
+
+Teams whose agent you evaluate: [`docs/TENANT_GUIDE.md`](docs/TENANT_GUIDE.md) (send traces, write a suite, label, calibrate, all through the API or UI). As the operator:
+
+```bash
+python -m elastic_evals setup --tenant platform --platform-key      # prints a platform key (tenants, keys, price book)
+curl -X POST -H "Authorization: Bearer $PLATFORM_KEY" -H "Content-Type: application/json" $EE/v1/tenants -d '{"id": "acme"}'
+curl -X POST -H "Authorization: Bearer $PLATFORM_KEY" -H "Content-Type: application/json" $EE/v1/api-keys -d '{"role": "admin", "tenant": "acme"}'
+```
+
+Suites that tenants register are checked against allow-lists (`EE_RULE_MODULES`, `EE_JUDGE_URLS`, `EE_JUDGE_KEY_ENVS`, `EE_HF_MODELS`; see `elastic_evals/suite_policy.py`). Create the Kafka spans topic with 6+ partitions: they are ingest's write concurrency.
 
 ## Run the whole stack
 

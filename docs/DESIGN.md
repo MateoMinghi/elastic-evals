@@ -399,6 +399,7 @@ Per suite, overridable per tenant:
 | `allow_hosted` | `false` = local-only: rules and local heads only, no text leaves the deployment |
 | `target_accuracy` | Minimum accuracy for a cheap layer's *confident* decisions (default 0.95) |
 | `tolerance` | How far below a check's best accuracy a cheaper route may be (default 1 point; critical checks use one standard error only) |
+| `min_class_examples` | Labels per class a critical check needs before local heads may decide it (default 20; L29) |
 | `audit_rate`, `audit_judge` | Share of conversations re-scored by an independent judge (default 2%); the drift monitor |
 | `max_ms_per_conv` | **New (L14):** latency budget the chosen set must respect |
 | `max_usd_per_1M_conv` | **New:** cost budget |
@@ -562,6 +563,8 @@ Based on [`research/sentry.md`](research/sentry.md). Built in v0.2 (`elastic_eva
 - **Eval datasets built from real conversations** need per-tenant consent and stay separated by tenant.
 - **Audit:** the OpenSearch security plugin's audit log, plus our API audit log.
 - **RBAC, retention, audit and masking stay in the open-source core.**
+- **Roles:** tenant roles (`admin`, `engineer`, `annotator`, `viewer`) act within their tenant only. Creating tenants, keys for another tenant and the shared price book need the operator's `platform` role (L29).
+- **Tenant suites are untrusted input.** The workers run what tenants register, so suites registered through the API may use built-in rules only, judges at OpenRouter or at operator-allowed URLs, operator-allowed key variables and Hugging Face models (`suite_policy.py`; `EE_RULE_MODULES`, `EE_JUDGE_URLS`, `EE_JUDGE_KEY_ENVS`, `EE_HF_MODELS`). A judge with a custom `base_url` gets no key unless one is configured (L29).
 
 ---
 
@@ -621,7 +624,7 @@ Each phase ends with a measurable gate.
 | **3. Engine as a service** | Evaluation workers on the stream; scores into `scores-*`; calibration lifecycle (candidate → shadow → active); drift alerts; eval-aware retention | Drift detection and recalibration work end to end on replayed traffic | ✓ The holdout replayed through the full path reproduces the engine exactly ([PIPELINE.md](../experiments/results/PIPELINE.md)); drift alerts, shadow comparison and promotion tested |
 | **4. Humans and offline** | Annotation queues with automatic filling; distillation loop; datasets and experiments; pytest plugin and CI gates; `synth` | A distilled head replaces judge calls on at least one check without breaching its floor | ✓ Frustration's route dropped the judge (e5 → Jev) and improved; −44% LLM calls overall ([DISTILL.md](../experiments/results/DISTILL.md)) |
 | **5. Sentry bridge** | Propagation guide; `before_send` helper; webhook bridge; External Issue links; quality-regression events | Click-through both ways on a demo; self-hosted proof of concept | ✓ Against self-hosted Sentry 25.7: 13 of 13 checks, click-through both ways in a browser, issue linked about 11 s after the exception ([SENTRY_POC.md](../experiments/results/SENTRY_POC.md)) |
-| **6. UI and governance** | The 5 screens; two-tier tenancy; audit log; Helm chart | First external tenant | Built ✓ (UI with Playwright tests, dedicated and pooled tenants, scoped API keys, audit log, compose and Helm). **Gate open: first tenant** |
+| **6. UI and governance** | The 5 screens; two-tier tenancy; audit log; Helm chart | First external tenant | Built ✓ (UI with Playwright tests, dedicated and pooled tenants, scoped API keys and a platform role, audit log, compose and Helm, [tenant guide](TENANT_GUIDE.md)). An onboarding dry run by an independent agent with only the tenant's materials completed every step, and its findings are fixed ([TENANT_DRYRUN.md](../experiments/results/TENANT_DRYRUN.md)). **Still to do: a first real external tenant** |
 
 **Phase-2 target peak and budgets (set in v0.3).** The reference scale is the one this design sizes for, a billion spans a month: 386 spans/s on average, a **target peak of 1,160 spans/s** (3× the average), so the gate load is **2,900 spans/s** (2.5× peak), sustained for 5 minutes, through the real collectors into a replicated multi-node cluster while evaluation and queries run. Budgets at that load:
 
@@ -680,7 +683,7 @@ Everything in §4–§11 exists and is tested. Tests: `pytest` (44: offline, and
 | Gates | `gates.py`, `gate` command; `experiments/cluster_test.py` | Phase-1 gate by cross-validation; multi-node failover and rollover |
 | Deployment | `Dockerfile`, `collector/Dockerfile`, `deploy/docker-compose.yml`, `deploy/helm/` | |
 
-**Not built:** nothing in the design. What remains are the gates that need things outside a container: real human-labelled traffic (phase 1; the `gate` command runs as soon as it exists), a production-sized cluster and a target peak (phase 2), a live Sentry installation (phase 5) and a first external tenant (phase 6).
+**Not built:** nothing in the design. Gates 2 (load at 2.5× the target peak on a replicated cluster), 3, 4 and 5 (a self-hosted Sentry) have passed. What remains needs people outside this project: ~200 real, human-labelled conversations for phase 1 (it passes on the synthetic holdout; the `gate` command runs as soon as they exist) and a first external tenant for phase 6 (an onboarding dry run passed after its findings were fixed).
 
 **Lessons from building it:**
 
@@ -699,6 +702,7 @@ Everything in §4–§11 exists and is tested. Tests: `pytest` (44: offline, and
 | L26 | On the synthetic holdout the phase-1 gate failed one check (fee_mismatch: 91.3% against 94.0%, SE 1.4). Calibration takes the cheapest route within one SE of the best on training data, and the gate rejects anything more than one SE below the best on held-out data, so a route chosen at the floor misses the gate about half the time. Cross-fitted thresholds alone moved it to 92.0%. Adding a floor at half an SE gave 92.7%, and every check passed, at $117 against $92 per 1M conversations ([GATE_PHASE1.md](../experiments/results/GATE_PHASE1.md)) | `crossfit_folds` and `floor_se` policy fields. Defaults favour cost; tenants who must clear the gate set `crossfit_folds: 5`, `floor_se: 0.5` |
 | L27 | A real Sentry broke the bridge in six ways the fake API could not: `issue.created` fires once per issue (later conversations come as `error.created`, regressions as `issue.unresolved`); one External Issue per issue; links by trace id; links arriving before evaluation were overwritten; errors raised in child spans lacked the conversation id; stored links had no URL ([SENTRY_POC.md](../experiments/results/SENTRY_POC.md)) | Test integrations against the real system early; the proof of concept is now a script (`experiments/sentry_poc.py`, `deploy/sentry-poc/`) |
 | L28 | The first sustained phase-2 run missed its latency budget (p95 44 s) because the Kafka topic had one partition: ingest commits offsets only after OpenSearch accepts a batch, so each partition has one bulk request in flight. Six partitions brought p95 to 22 s at 2,900 spans/s. A 1-minute run had hidden a slower backlog that a 5-minute run exposed, when the e5 heads shared the VM's CPU ([PHASE2.md](../experiments/results/PHASE2.md)) | Partitions are ingest's write concurrency (§5.2); load tests must be sustained, not bursts; keep local heads off the storage nodes |
+| L29 | Preparing a tenant onboarding exposed two security defects: tenant admins held `*:*` (cross-tenant key minting) and tenant-registered suites could make workers import code or send platform credentials to a tenant's URL. The dry run itself found a data-loss bug (turns ending on a tool call), a critical check cleared by a head trained on 8 positives, a non-independent audit judge and no tenant documentation ([TENANT_DRYRUN.md](../experiments/results/TENANT_DRYRUN.md)) | Treat tenant configuration as untrusted input; separate platform and tenant roles; a minimum class count before local heads decide critical checks; a tenant guide |
 | L22 | One shared 4-core VM ingested 3,400 spans/s end to end and stored `obs` at about 320 MB per million spans (`zstd`, after merge); list views answered in 25–35 ms at p50, full-text search in about 240 ms; local-only evaluation ran at 16 conversations/s ([LOAD.md](../experiments/results/LOAD.md)) | At a billion spans a month that is about 320 GB of `obs` before replicas, before retention. Full-text search is the slow query (it resolves content hits to conversations in two steps): index the first user message and flags on `traces-*` for common searches. Local heads are the evaluation bottleneck on CPU: serve them with ONNX Runtime or TEI (§11) |
 
 ---
@@ -713,6 +717,7 @@ Everything in §4–§11 exists and is tested. Tests: `pytest` (44: offline, and
 - Multi-node cluster: [`CLUSTER.md`](../experiments/results/CLUSTER.md) (`experiments/cluster_test.py`)
 - Phase-2 gate at 2.5× the target peak: [`PHASE2.md`](../experiments/results/PHASE2.md) (`experiments/phase2_gate.py`)
 - Phase-5 gate against a self-hosted Sentry: [`SENTRY_POC.md`](../experiments/results/SENTRY_POC.md) (`experiments/sentry_poc.py`, `deploy/sentry-poc/`)
+- Phase-6 onboarding dry run: [`TENANT_DRYRUN.md`](../experiments/results/TENANT_DRYRUN.md); the tenant guide: [`TENANT_GUIDE.md`](TENANT_GUIDE.md)
 - Phase-1 gate on the synthetic holdout: [`GATE_PHASE1.md`](../experiments/results/GATE_PHASE1.md) (`python -m elastic_evals gate`); cross-fitted thresholds and floors: [`CROSSFIT.md`](../experiments/results/CROSSFIT.md) (`experiments/crossfit_experiment.py`)
 - Code:
   - `elastic_evals/`: the engine

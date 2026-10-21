@@ -49,11 +49,16 @@ def _messages(v):
             v = json.loads(v)
         except json.JSONDecodeError:
             return [{"role": "user", "parts": [{"type": "text", "content": v}]}]
-    return v if isinstance(v, list) else []
+    return [m for m in v if isinstance(m, dict)] if isinstance(v, list) else []
+
+
+def _parts(msg):
+    # a message with only tool calls has no text, and some instrumentations send "parts": null
+    return [p for p in (msg.get("parts") or []) if isinstance(p, dict)]
 
 
 def _texts(msg):
-    return [p.get("content", "") for p in msg.get("parts", []) if p.get("type") == "text" and p.get("content")]
+    return [p.get("content", "") for p in _parts(msg) if p.get("type") == "text" and p.get("content")]
 
 
 def _tool_turn(span, content):
@@ -82,7 +87,7 @@ def _from_history(spans, stage_by_span):
             turns += [{"role": role, "text": t} for t in _texts(m)]
         elif role == "tool":
             pass  # tool turns come from the tool_call parts below, paired with their responses
-        for p in m.get("parts", []):
+        for p in _parts(m):
             if p.get("type") == "tool_call":
                 turns.append({"role": "tool", "name": p.get("name", ""), "args": p.get("arguments") or {},
                               "result": "", "_id": p.get("id")})
@@ -126,7 +131,7 @@ def _trajectory(spans, stage_by_span):
             step.update(tool=t["name"], args=t["args"], result=t["result"])
         elif step["type"] == "GENERATION":
             out = [t for m in _messages(c.get("output_messages")) for t in _texts(m)]
-            calls = [p.get("name") for m in _messages(c.get("output_messages")) for p in m.get("parts", [])
+            calls = [p.get("name") for m in _messages(c.get("output_messages")) for p in _parts(m)
                      if p.get("type") == "tool_call"]
             step.update(model=s.get("response_model") or s.get("request_model"),
                         output=" ".join(out) or (f"calls {', '.join(calls)}" if calls else ""),
@@ -150,6 +155,26 @@ def _record(spans):
     return record
 
 
+_STOPWORDS = {
+    "en": {"the", "and", "you", "is", "to", "my", "for", "it", "a", "of", "i", "please", "can", "what", "this", "with"},
+    "es": {"el", "la", "que", "de", "y", "es", "por", "para", "mi", "con", "los", "las", "un", "una", "no", "quiero"},
+    "pt": {"o", "a", "que", "de", "e", "é", "para", "meu", "minha", "com", "os", "um", "uma", "não", "você", "obrigado"},
+    "fr": {"le", "la", "les", "et", "est", "je", "vous", "pour", "mon", "ma", "avec", "un", "une", "pas", "merci", "de"},
+    "de": {"der", "die", "das", "und", "ist", "ich", "sie", "für", "mein", "mit", "ein", "eine", "nicht", "bitte", "zu"},
+}
+
+
+def detect_lang(text: str) -> str:
+    """Language of the user's text when the agent sent no `ee.lang`: a stopword vote over a few
+    languages, "und" when too short or too close to call. Per-language reporting needs a value."""
+    words = [w.strip(".,;:!?¿¡()\"'") for w in text.lower().split()]
+    if len(words) < 4:
+        return "und"
+    hits = sorted(((sum(w in sw for w in words), lang) for lang, sw in _STOPWORDS.items()), reverse=True)
+    (best, lang), (second, _) = hits[0], hits[1]
+    return lang if best >= 2 and best >= 1.5 * second else "und"
+
+
 def build(conversation_id: str, spans: list[dict], stage: list[dict], tenant_id: str | None = None,
           record_resolver=None) -> dict:
     spans = sorted(spans, key=lambda s: (ns(s["start_time"]), s.get("parent_span_id") is not None))
@@ -162,7 +187,9 @@ def build(conversation_id: str, spans: list[dict], stage: list[dict], tenant_id:
     if record_resolver is not None:
         record = record_resolver(record, spans) or record
     first = spans[0] if spans else {}
-    lang = next(((s.get("attributes") or {}).get("ee.lang") for s in spans if (s.get("attributes") or {}).get("ee.lang")), "und")
+    lang = next(((s.get("attributes") or {}).get("ee.lang") for s in spans if (s.get("attributes") or {}).get("ee.lang")), None)
+    if lang in (None, "und"):
+        lang = detect_lang(" ".join(t["text"] for t in turns if t["role"] == "user"))
     models = sorted({s.get("response_model") or s.get("request_model") for s in spans
                      if s.get("type") == "GENERATION" and (s.get("response_model") or s.get("request_model"))})
     conv = {

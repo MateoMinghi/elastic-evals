@@ -55,6 +55,23 @@ func Normalize(attrs pcommon.Map) {
 		copyIfAbsent(attrs, "input.value", "gen_ai.tool.call.arguments")
 		copyIfAbsent(attrs, "output.value", "gen_ai.tool.call.result")
 	}
+	// An OpenInference AGENT span carries the turn's user input and final answer as input.value /
+	// output.value; as plain text they are the turn's messages (JSON payloads are framework state).
+	if kind, ok := attrs.Get("openinference.span.kind"); ok && kind.AsString() == "AGENT" {
+		for _, io := range []struct{ value, mime, target, role string }{
+			{"input.value", "input.mime_type", "gen_ai.input.messages", "user"},
+			{"output.value", "output.mime_type", "gen_ai.output.messages", "assistant"},
+		} {
+			v, ok := attrs.Get(io.value)
+			text := strings.TrimSpace(v.AsString())
+			mime, hasMime := attrs.Get(io.mime)
+			plain := hasMime && mime.AsString() == "text/plain" ||
+				!hasMime && !strings.HasPrefix(text, "{") && !strings.HasPrefix(text, "[")
+			if ok && text != "" && plain {
+				putJSONIfAbsent(attrs, io.target, []Message{{Role: io.role, Parts: []Part{{Type: "text", Content: v.AsString()}}}})
+			}
+		}
+	}
 
 	// --- OpenLLMetry (Traceloop) ---------------------------------------------------------------
 	if kind, ok := attrs.Get("traceloop.span.kind"); ok {
@@ -244,7 +261,7 @@ func indexedMessages(attrs pcommon.Map, prefix, inner string) []Message {
 	msgs := make([]Message, 0, len(idx))
 	for _, i := range idx {
 		f := byIndex[i]
-		m := Message{Role: f["role"], FinishReason: f["finish_reason"]}
+		m := Message{Role: f["role"], FinishReason: f["finish_reason"], Parts: []Part{}} // [] not null: a tool-call-only turn has no text
 		if f["role"] == "tool" {
 			m.Parts = append(m.Parts, Part{Type: "tool_call_response", ID: f["tool_call_id"], Response: f["content"]})
 		} else if c := f["content"]; c != "" {

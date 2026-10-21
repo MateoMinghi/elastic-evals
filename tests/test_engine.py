@@ -272,3 +272,56 @@ def test_trajectory_from_plain_turns_and_views():
     st = steps(conv)
     assert [x["type"] for x in st] == ["TOOL", "GENERATION"] and st[0]["span_id"] == "t1"
     assert "TOOL get_balance({}) -> error: x" in render(st) and "get_balance" in view(conv, "trajectory")
+
+
+def test_critical_check_needs_enough_labels_for_local_heads():
+    """A head fitted on a handful of positives must not clear a critical check (tenant dry run)."""
+    yaml_text = SUITE_YAML.replace("""    rule: tests.fakes:rule_heuristic""", """    rule: tests.fakes:rule_heuristic
+    critical: true""").replace("""  - {id: clf, type: fake_classifier, usd: 0.00004, ms: 200}""",
+                               """  - {id: head, type: fake_local}""")
+    convs = make_convs(30, seed=5)
+    for c in convs:  # a perfect-looking local head: on 30 conversations it cannot be told from luck
+        c["fake"]["head"] = {"style": float(c["labels"]["style"])}
+    few = Suite.from_yaml(yaml_text)
+    cal, _ = calibrate(few, convs, labels_of(convs))
+    assert "head" not in cal["routes"]["style"]
+    assert any("style: critical" in w for w in cal["warnings"])
+    lenient = Suite.from_yaml(yaml_text)
+    lenient.policy.min_class_examples = 5
+    cal, _ = calibrate(lenient, convs, labels_of(convs))
+    assert cal["routes"]["style"][-1] == "head" or "head" in cal["routes"]["style"]
+
+
+def test_audit_judge_is_independent_of_the_routes(suite, calibrated):
+    cal, _ = calibrated
+    routed = {e for r in cal["routes"].values() for e in r if e.startswith("judge")}
+    assert routed, cal["routes"]
+    s = copy.deepcopy(suite)
+    s.policy.audit_judge = sorted(routed)[0]
+    convs = make_convs()
+    cal2, evs = calibrate(s, convs, labels_of(convs))
+    assert cal2["audit_judge"] not in {e for r in cal2["routes"].values() for e in r}
+    assert any("also decides routes" in w for w in cal2["warnings"])
+    assert Engine(s, cal2, evs).audit.id == cal2["audit_judge"]
+
+
+def test_custom_judge_url_gets_no_platform_key():
+    import asyncio
+
+    from elastic_evals.evaluators import LLMJudgeEvaluator
+
+    class Capture:
+        async def chat(self, model, messages, tag=None, url=None, api_key_env=None, **params):
+            self.url, self.key = url, api_key_env
+            return {"choices": [{"message": {"content": "{}"}}], "usage": {}}
+
+    s = Suite.from_yaml(SUITE_YAML)
+    for cfg, want in (({"id": "a", "type": "llm", "model": "m"}, "OPENROUTER_API_KEY"),
+                      ({"id": "b", "type": "llm", "model": "m", "base_url": "http://judge.internal/v1"}, None),
+                      ({"id": "c", "type": "llm", "model": "m", "base_url": "http://judge.internal/v1", "api_key_env": "JUDGE_KEY"}, "JUDGE_KEY")):
+        client = Capture()
+        try:
+            asyncio.run(LLMJudgeEvaluator(cfg, s, client).evaluate({"id": "x", "turns": [], "record": {}}, s.questions))
+        except Exception:  # noqa: BLE001 - only the call's arguments matter here
+            pass
+        assert client.key == want, cfg

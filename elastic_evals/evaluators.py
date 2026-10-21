@@ -186,7 +186,10 @@ class LLMJudgeEvaluator(Evaluator):
             user += f"\n\nTrajectory (agent steps in order):\n{render(steps(conv))}"
         res = await self.client.chat(self.model, [{"role": "system", "content": self.system_prompt()},
                                                   {"role": "user", "content": user}], tag=self.id,
-                                     url=self.cfg.get("base_url"), api_key_env=self.cfg.get("api_key_env", "OPENROUTER_API_KEY"),
+                                     url=self.cfg.get("base_url"),
+                                     # the OpenRouter key goes to OpenRouter only; another base_url sends the key
+                                     # its api_key_env names, or none
+                                     api_key_env=self.cfg.get("api_key_env", None if self.cfg.get("base_url") else "OPENROUTER_API_KEY"),
                                      **params)
         content = res["choices"][0]["message"]["content"] or ""
         try:
@@ -252,15 +255,25 @@ class HFClassifierEvaluator(Evaluator):
         return out, 0.0, time.perf_counter() - t0
 
 
+def builtin_rules() -> dict:
+    """Rule functions defined in elastic_evals.rules and elastic_evals.trajectory (not names they import)."""
+    from . import trajectory
+    return {n: f for mod in (rules_lib, trajectory) for n, f in vars(mod).items()
+            if inspect.isfunction(f) and f.__module__ == mod.__name__ and not n.startswith("_")
+            and next(iter(inspect.signature(f).parameters), None) in ("conv", "item")  # helpers take text
+            and n not in ("items", "steps", "stated_fee")}  # helpers that take a conversation
+
+
 def resolve_rule(name: str):
-    """A rule is a function in elastic_evals.rules, or any importable 'package.module:function'."""
+    """A rule is a built-in rule function, or an importable 'package.module:function' (operators only:
+    suites registered through the API may name modules listed in EE_RULE_MODULES, see suite_policy)."""
     if ":" in name:
         module, fn = name.split(":", 1)
         return getattr(importlib.import_module(module), fn)
-    if hasattr(rules_lib, name):
-        return getattr(rules_lib, name)
-    from . import trajectory
-    return getattr(trajectory, name)
+    found = builtin_rules().get(name)
+    if found is None:
+        raise ValueError(f"unknown rule {name!r}")
+    return found
 
 
 TYPES = {"rules": RulesEvaluator, "local_head": LocalHeadEvaluator, "jev": JevEvaluator, "llm": LLMJudgeEvaluator,

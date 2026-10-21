@@ -75,9 +75,16 @@ def labelled_conversations(pg, os_, registry, tenant, label_set_id, sources=("hu
 
 
 # -- queues --------------------------------------------------------------------------------------
-def create_queue(pg: Postgres, tenant, suite_id, name, checks, fill_rules=None) -> dict:
+def create_queue(pg: Postgres, tenant, suite_id, name, checks, fill_rules=None, label_set_id=None) -> dict:
+    """A queue writes to its own label set, or to an existing one of the same tenant and suite, so
+    several queues (weekly sample, disagreements) feed one calibration."""
     qid = new_id("aq")
-    lsid = create_label_set(pg, tenant, suite_id, f"queue:{name}")
+    if label_set_id:
+        if not pg.one("SELECT 1 AS ok FROM label_sets WHERE id=%s AND tenant_id=%s AND suite_id=%s", label_set_id, tenant, suite_id):
+            raise KeyError(label_set_id)
+        lsid = label_set_id
+    else:
+        lsid = create_label_set(pg, tenant, suite_id, f"queue:{name}")
     pg.exec("""INSERT INTO annotation_queues (id, tenant_id, suite_id, name, checks, label_set_id, fill_rules)
                VALUES (%s, %s, %s, %s, %s, %s, %s)""", qid, tenant, suite_id, name, list(checks), lsid,
             Jsonb(fill_rules or []))
@@ -138,16 +145,34 @@ def fill(pg: Postgres, os_: OpenSearch, registry, qid, window_days=1) -> dict:
 
 
 def next_item(pg: Postgres, qid, annotator, lock_minutes=15):
-    """Lock the next pending item (or one whose lock expired) for this annotator."""
+    """The item this annotator already holds, else lock the next pending item (or one whose lock
+    expired). Resuming means a reload or a repeated call never strands a locked item."""
     with pg.tx() as c:
-        row = c.execute("""SELECT conversation_id FROM annotation_items
+        held = c.execute("""UPDATE annotation_items SET locked_at=now() WHERE queue_id=%s AND status='locked' AND locked_by=%s
+                            RETURNING conversation_id""", (qid, annotator)).fetchone()
+        if held is not None:
+            row = held
+        else:
+            row = c.execute("""SELECT conversation_id FROM annotation_items
                            WHERE queue_id=%s AND (status='pending' OR (status='locked' AND locked_at < now() - make_interval(mins => %s)))
                            ORDER BY priority DESC, created_at LIMIT 1 FOR UPDATE SKIP LOCKED""", (qid, lock_minutes)).fetchone()
-        if row is None:
-            return None
-        c.execute("""UPDATE annotation_items SET status='locked', locked_by=%s, locked_at=now()
-                     WHERE queue_id=%s AND conversation_id=%s""", (annotator, qid, row["conversation_id"]))
+            if row is None:
+                return None
+            c.execute("""UPDATE annotation_items SET status='locked', locked_by=%s, locked_at=now()
+                         WHERE queue_id=%s AND conversation_id=%s""", (annotator, qid, row["conversation_id"]))
     return pg.one("SELECT * FROM annotation_items WHERE queue_id=%s AND conversation_id=%s", qid, row["conversation_id"])
+
+
+def items(pg: Postgres, qid, status=None, limit=500):
+    return pg.all("""SELECT conversation_id, status, priority, reason, locked_by, locked_at, created_at FROM annotation_items
+                     WHERE queue_id=%s AND (%s::text IS NULL OR status=%s) ORDER BY priority DESC, created_at LIMIT %s""",
+                  qid, status, status, limit)
+
+
+def release(pg: Postgres, qid, conversation_id):
+    """Give a locked item back to the queue."""
+    return pg.exec("""UPDATE annotation_items SET status='pending', locked_by=NULL, locked_at=NULL
+                      WHERE queue_id=%s AND conversation_id=%s AND status='locked'""", qid, conversation_id)
 
 
 def submit(pg: Postgres, os_: OpenSearch, registry, qid, conversation_id, labels: dict, annotator, lang=None):

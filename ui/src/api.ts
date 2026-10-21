@@ -17,6 +17,7 @@ export function saveSettings(key: string, tenant: string) {
   } catch {
     /* storage unavailable: settings last for this page only */
   }
+  window.dispatchEvent(new Event("ee-settings"));
 }
 
 export class ApiError extends Error {

@@ -107,6 +107,20 @@ def test_auth_scopes_and_isolation(deployment):
     cid = deployment["convs"][0]["id"]
     assert c.get(f"/v1/conversations/{cid}", headers=k["other"]).status_code == 404
     assert c.get(f"/v1/calibrations/{deployment['cal']['id']}", headers=k["other"]).status_code == 404
+    assert "artifact_uri" not in c.get(f"/v1/calibrations/{deployment['cal']['id']}", headers=k["admin"]).json()
+    # re-scoring is per tenant: another tenant's admin reopens nothing of acme's
+    assert c.post("/v1/conversations/rescore", json={"conversation_ids": [cid]}, headers=k["other"]).json() == {"reopened": 0}
+    assert c.post("/v1/conversations/rescore", json={"conversation_ids": [cid]}, headers=k["viewer"]).status_code == 403
+    # a suite is run by the platform's workers: no imported code, no credentials sent where the tenant says
+    ok = c.put("/v1/suites/mine", json={"yaml": SUITE_YAML}, headers=k["other"])
+    assert ok.status_code == 200, ok.text
+    spec = yaml.safe_load(SUITE_YAML)
+    for evil in ({"questions": {**spec["questions"], "x": {"ask": "?", "view": "user", "rule": "os:system"}}},
+                 {"evaluators": spec["evaluators"] + [{"id": "j", "type": "llm", "model": "m", "base_url": "https://attacker.example/v1"}]},
+                 {"evaluators": spec["evaluators"] + [{"id": "j", "type": "llm", "model": "m", "api_key_env": "AWS_SECRET_ACCESS_KEY"}]},
+                 {"evaluators": spec["evaluators"] + [{"id": "h", "type": "hf_classifier", "model": "someone/pickled-weights"}]}):
+        r = c.put("/v1/suites/mine", json={"yaml": yaml.safe_dump({**spec, **evil})}, headers=k["other"])
+        assert r.status_code == 422 and r.json()["detail"]["problems"], r.text
     # a tenant admin administers its own tenant only; global scopes belong to the platform role
     assert c.post("/v1/tenants", json={"id": "evil"}, headers=k["other"]).status_code == 403
     assert c.post("/v1/api-keys", json={"role": "admin", "tenant": "acme"}, headers=k["other"]).status_code == 403
@@ -158,6 +172,8 @@ def test_calibration_lifecycle(deployment):
     reg.save_calibration("acme", "banking", cal2, evs2)
     assert c.post(f"/v1/calibrations/{cal2['id']}/shadow", headers=k).json()["status"] == "shadow"
     # no audited traffic yet (local-only: no audit judge): promotion needs force
+    cmp = c.get("/v1/suites/banking/shadow-comparison", headers=k).json()
+    assert cmp["enough_data"] is False and cmp["promote"] is False and "needed" in cmp
     r = c.post(f"/v1/calibrations/{cal2['id']}/promote", headers=k)
     assert r.status_code == 409
     r = c.post(f"/v1/calibrations/{cal2['id']}/promote", params={"force": True}, headers=k)
@@ -185,6 +201,13 @@ def test_annotation_flow_and_calibration_from_labels(deployment):
             break
         cid = nxt["item"]["conversation_id"]
         assert nxt["conversation"]["turns"]
+        if done == 0:  # asking again (a reload) resumes the held item instead of locking another
+            again = c.post(f"/v1/annotation-queues/{q['id']}/next", headers=k["annot"]).json()
+            assert again["item"]["conversation_id"] == cid
+            locked = c.get(f"/v1/annotation-queues/{q['id']}/items", params={"status": "locked"}, headers=k["annot"]).json()
+            assert [i["conversation_id"] for i in locked] == [cid]
+            assert c.post(f"/v1/annotation-queues/{q['id']}/items/{cid}/release", headers=k["annot"]).json() == {"released": 1}
+            assert c.post(f"/v1/annotation-queues/{q['id']}/next", headers=k["annot"]).json()["item"]["conversation_id"] == cid
         truth = labels_by_id[cid]
         r = c.post(f"/v1/annotation-queues/{q['id']}/items/{cid}/labels",
                    json={"labels": {"user_frustrated": truth["user_frustrated"], "fee_mismatch": truth["fee_mismatch"]}},
@@ -192,6 +215,12 @@ def test_annotation_flow_and_calibration_from_labels(deployment):
         assert r.status_code == 200
         done += 1
     assert done == added["stratified"]
+    # a second queue (e.g. disagreements) can write to the same label set, so both feed one calibration
+    q2 = c.post("/v1/annotation-queues", json={"suite_id": "banking", "name": "disagreements", "checks": ["fee_mismatch"],
+                                              "label_set_id": q["label_set_id"]}, headers=k["admin"]).json()
+    assert q2["label_set_id"] == q["label_set_id"]
+    assert c.post("/v1/annotation-queues", json={"suite_id": "banking", "name": "x", "checks": ["fee_mismatch"],
+                                               "label_set_id": "ls_nope"}, headers=k["admin"]).status_code == 404
     bad = c.post(f"/v1/annotation-queues/{q['id']}/items/x/labels", json={"labels": {"tool_loop": 1}}, headers=k["annot"])
     assert bad.status_code == 422
     agree = c.get(f"/v1/label-sets/{q['label_set_id']}/agreement", headers=k["annot"]).json()
@@ -294,3 +323,13 @@ def test_prices_export_and_reprice(deployment):
     want = sum(s["usage"]["input_tokens"] * 1.0 + s["usage"]["output_tokens"] * 2.0 for s in spans) / 1e6
     assert after["cost_usd"] == pytest.approx(want) and after["price_ids"] and after["repriced_at"]
     assert c.post("/v1/reprice", json={"from": "2000-01-01"}, headers=k).json()["repriced"] == 0  # idempotent
+
+
+def test_rescore_reopens_conversations(deployment):
+    c, k, pg = deployment["client"], deployment["keys"]["admin"], deployment["pg"]
+    cid = deployment["convs"][5]["id"]
+    assert c.post("/v1/conversations/rescore", json={}, headers=k).status_code == 422
+    assert c.post("/v1/conversations/rescore", json={"conversation_ids": [cid]}, headers=k).json() == {"reopened": 1}
+    row = pg.one("SELECT status, attempts FROM trace_tracker WHERE tenant_id='acme' AND conversation_id=%s", cid)
+    assert row["status"] == "open" and row["attempts"] == 0
+    pg.exec("UPDATE trace_tracker SET status='evaluated' WHERE tenant_id='acme' AND conversation_id=%s", cid)
