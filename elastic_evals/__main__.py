@@ -12,6 +12,8 @@ Services (OpenSearch, Postgres, Kafka; see deploy/):
   setup       [--pools shared] [--tenant acme --dedicated] [--admin-key] [--platform-key] [--dashboards URL]
                                                                             indices, templates, ISM, schema, saved objects
   serve       [--port 8000]                                                 API + UI
+  mcp         [--url http://localhost:8000] [--read-only] [--transport stdio|streamable-http]
+                                                                            MCP server for AI agents (key in EE_API_KEY)
   presidio    [--port 3000]                                                 PII analyzer for the gateway
   tracker     [--brokers localhost:9092] [--session-idle 300]               trace-complete signal
   worker      [--embed]                                                     evaluation workers
@@ -203,6 +205,11 @@ def cmd_serve(a):
     uvicorn.run("elastic_evals.api:app", host=a.host, port=a.port, log_level="info")
 
 
+def cmd_mcp(a):
+    from .mcp_server import serve
+    serve(a.transport, a.host, a.port, a.read_only, a.url)
+
+
 def cmd_presidio(a):
     import uvicorn
     uvicorn.run("elastic_evals.presidio_service:app", host=a.host, port=a.port, log_level="info")
@@ -370,6 +377,13 @@ def main(argv=None):
     sv = sub.add_parser("serve")
     sv.add_argument("--host", default="0.0.0.0")
     sv.add_argument("--port", type=int, default=8000)
+    mc = sub.add_parser("mcp", help="MCP server that lets an AI agent operate a running elastic-evals API")
+    mc.add_argument("--url", default=os.environ.get("EE_API_URL", "http://localhost:8000"))
+    mc.add_argument("--read-only", action="store_true", default=os.environ.get("EE_MCP_READ_ONLY") == "1",
+                    help="do not offer the tools that change anything")
+    mc.add_argument("--transport", choices=["stdio", "streamable-http"], default="stdio")
+    mc.add_argument("--host", default="127.0.0.1")
+    mc.add_argument("--port", type=int, default=8765)
     ps = sub.add_parser("presidio", help="Presidio analyzer service for the gateway's redaction")
     ps.add_argument("--host", default="0.0.0.0")
     ps.add_argument("--port", type=int, default=3000)
@@ -427,7 +441,7 @@ def main(argv=None):
         print_report(json.loads((Path(args.calib) / "calibration.json").read_text()))
         return 0
     handler = {"calibrate": cmd_calibrate, "run": cmd_run, "experiment": cmd_experiment, "synth": cmd_synth,
-               "setup": cmd_setup, "serve": cmd_serve, "presidio": cmd_presidio, "tracker": cmd_tracker, "worker": cmd_worker,
+               "setup": cmd_setup, "serve": cmd_serve, "mcp": cmd_mcp, "presidio": cmd_presidio, "tracker": cmd_tracker, "worker": cmd_worker,
                "replay": cmd_replay, "suite": cmd_suite, "register": cmd_register, "shadow": cmd_lifecycle,
                "promote": cmd_lifecycle, "reject": cmd_lifecycle, "drift": cmd_drift, "annotate": cmd_annotate,
                "reprice": cmd_reprice, "prices": cmd_prices,
