@@ -10,7 +10,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.13" }
-      - run: pip install -e ".[service,otel,sentry,dev]" ruff
+      - run: pip install -e ".[service,mcp,otel,sentry,dev]" ruff
       - run: ruff check elastic_evals tests --select E,F,W,B --ignore E501,B008,E731,B905,B023
       # integration tests skip themselves when OpenSearch, Postgres, Kafka or the collector are absent
       - run: pytest -q

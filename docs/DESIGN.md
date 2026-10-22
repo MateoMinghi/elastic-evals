@@ -564,6 +564,7 @@ Based on [`research/sentry.md`](research/sentry.md). Built in v0.2 (`elastic_eva
 - **Audit:** the OpenSearch security plugin's audit log, plus our API audit log.
 - **RBAC, retention, audit and masking stay in the open-source core.**
 - **Roles:** tenant roles (`admin`, `engineer`, `annotator`, `viewer`) act within their tenant only. Creating tenants, keys for another tenant and the shared price book need the operator's `platform` role (L29).
+- **Agents operate through the API.** The MCP server (`mcp_server.py`) is a client of the HTTP API holding one key, so scopes, tenant filters and the audit log apply unchanged; it has no storage access of its own. It offers no tool for tenants, keys, prices, human labels or score corrections: labels are the ground truth for calibration and drift, and an agent must not grade itself. That is a choice of tools; the key's role is the boundary.
 - **Tenant suites are untrusted input.** The workers run what tenants register, so suites registered through the API may use built-in rules only, judges at OpenRouter or at operator-allowed URLs, operator-allowed key variables and Hugging Face models (`suite_policy.py`; `EE_RULE_MODULES`, `EE_JUDGE_URLS`, `EE_JUDGE_KEY_ENVS`, `EE_HF_MODELS`). A judge with a custom `base_url` gets no key unless one is configured (L29).
 
 ---
@@ -678,6 +679,7 @@ Everything in §4–§11 exists and is tested. Tests: `pytest` (50: offline, and
 | Labels, annotation queues, agreement | `annotation.py` | Fill rules: audit disagreement, tier disagreement, low confidence, stratified |
 | Datasets, experiments, gates, pytest plugin | `experiments.py`, `pytest_plugin.py` | Versioned items; promptfoo-style assertions |
 | Synthetic sets, distillation | `synth.py`, `distill.py` | |
+| MCP server | `mcp_server.py`, `mcp` command | 30 tools over the API (18 read, 12 write; `--read-only` drops the writes); stdio or streamable HTTP; a test checks every tool's request against the routes of the real app |
 | API, Sentry bridge | `api.py`, `sentry.py` | Scoped API keys per tenant and a platform role; audit log; re-scoring; HMAC webhooks on issue, error and regression events; External Issue links to the issue's conversations |
 | Tenant suite policy | `suite_policy.py` | Built-in rules only; judge URLs, key variables and Hugging Face models from operator allow-lists |
 | UI | `ui/` | The five screens of §10 |

@@ -297,6 +297,22 @@ curl -X POST -H "Authorization: Bearer $PLATFORM_KEY" -H "Content-Type: applicat
 
 Suites that tenants register are checked against allow-lists (`EE_RULE_MODULES`, `EE_JUDGE_URLS`, `EE_JUDGE_KEY_ENVS`, `EE_HF_MODELS`; see `elastic_evals/suite_policy.py`). Create the Kafka spans topic with 6+ partitions: they are ingest's write concurrency.
 
+## Letting an AI agent operate it (MCP)
+
+`python -m elastic_evals mcp` starts an [MCP](https://modelcontextprotocol.io) server that gives an AI agent (Claude Code, Claude Desktop, your own) tools to inspect and manage a running deployment: search conversations and scores, read and write suites, run calibrations and move them through shadow to active, run drift checks, fill annotation queues, build datasets. It is a thin client of the HTTP API, so it needs no database access and adds no new way in: tenant isolation, role scopes and the audit log are the API's, and the agent acts as the one API key you give it.
+
+```bash
+pip install "elastic-evals[mcp]"
+export EE_API_URL=http://localhost:8000 EE_API_KEY=ek_xxx.yyy      # the key belongs in the environment, not on a command line
+claude mcp add elastic-evals -- python -m elastic_evals mcp --read-only
+```
+
+For other clients, the same command in their MCP configuration (`{"command": "python", "args": ["-m", "elastic_evals", "mcp"], "env": {"EE_API_URL": "...", "EE_API_KEY": "..."}}`). `--transport streamable-http --port 8765` serves it over HTTP instead; that endpoint has no authentication of its own and acts with the process's key for everyone who can reach it, so keep it on localhost or behind your own proxy.
+
+Start with `--read-only`, which does not offer the 12 tools that change anything. Give the agent the narrowest role for the job: a tool whose scope the key lacks returns the API's `403 missing scope …`. `whoami` shows what the key can do. Tools that change production behaviour (`promote_calibration`, `rescore`) are marked destructive so clients can ask for confirmation, and promotion keeps the API's own gate: a shadow candidate that does not agree with the audit judge at least as well as the active calibration is refused, and there is no `force`.
+
+What it leaves out on purpose: tenants, API keys and the price book (platform administration), and human labels and score corrections. Labels are the ground truth that calibration and the drift monitor are measured against, so an agent must not write them. This is a choice of tools, not a permission boundary: the same key can still call those API routes directly, so use a role that lacks `annotations:write` and `scores:write` if that matters.
+
 ## The engine without any services
 
 ```bash
@@ -362,7 +378,7 @@ sentry_sdk.init(dsn=..., before_send=before_send(ui_url="https://evals.example.c
 
 | Path | What |
 |---|---|
-| `elastic_evals/` | Python: engine, calibration, evaluators, tracker, worker, API (FastAPI), Sentry bridge, CLI, pytest plugin |
+| `elastic_evals/` | Python: engine, calibration, evaluators, tracker, worker, API (FastAPI), MCP server, Sentry bridge, CLI, pytest plugin |
 | `collector/` | Go: the `elasticevals` processor and `elasticevals_opensearch` exporter, built into the `eecol` Collector distribution |
 | `ui/` | TypeScript + React: conversations, viewer, scores and calibration, experiments, annotation |
 | `deploy/` | Collector configs, docker compose, Helm chart |

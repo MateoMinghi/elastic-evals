@@ -48,7 +48,7 @@ Please run them before you push. UI changes should also pass the Playwright test
 
 | Path | What |
 |---|---|
-| `elastic_evals/` | Python: engine (`suite`, `calibrate`, `evaluators`, `engine`), services (`tracker`, `worker`, `api`), `sentry`, CLI (`__main__`), pytest plugin |
+| `elastic_evals/` | Python: engine (`suite`, `calibrate`, `evaluators`, `engine`), services (`tracker`, `worker`, `api`), `mcp_server`, `sentry`, CLI (`__main__`), pytest plugin |
 | `elastic_evals/store/` | OpenSearch client and templates, Postgres access and migrations (`store/schema/*.sql`) |
 | `collector/` | Go: `processor/eeprocessor` (tenant tagging, normaliser, redaction), `exporter` (OpenSearch writer) |
 | `ui/` | React + TypeScript (Vite); tests in `ui/tests/` |
