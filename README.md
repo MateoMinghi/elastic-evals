@@ -353,6 +353,17 @@ def test_transfer(ee):
 
 Use `--ee-baseline run.json` and `--ee-report run.json` for relative gates in CI.
 
+### Improving the agent's harness
+
+`evolve` uses the suite to improve the agent itself. It edits the harness (the prompts, tool descriptions and configuration in one directory) and keeps a change only if the suite shows it helps.
+
+```bash
+python -m elastic_evals evolve --suite S --calib calib/ --items items.jsonl --harness harness/ \
+    --agent my_pkg.agent:build --model <proposer, not the judges' family> --out evo/ --iterations 10
+```
+
+`build(harness_dir)` returns the same kind of agent function `experiment` takes. A proposer gets the failing train conversations and suggests edits. Each edit must beat its parent on validation items: a gain of at least one standard error, and no check regressing. The test split is scored once at the end, with the independent audit judge, which catches gains that only fool the evaluators. Every attempt is kept in `evo/archive.jsonl`, and the best harness is left in `evo/candidates/` for you to review. See [DESIGN.md §6.11](docs/DESIGN.md#611-harness-optimisation-evolve).
+
 ### In your agent (Sentry)
 
 ```python

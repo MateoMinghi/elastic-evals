@@ -89,8 +89,9 @@ def summarize(items, suite, baseline: dict | None = None, tolerance: float = 0.0
 
 
 async def run_async(agent, items, suite, calibration, evaluators, run_id=None, baseline=None, tolerance=0.02,
-                    concurrency=4):
-    """agent(item_input) -> conversation dict (sync or async). items: [{"id", "input", "expected"}]."""
+                    concurrency=4, audit=False):
+    """agent(item_input) -> conversation dict (sync or async). items: [{"id", "input", "expected"}].
+    audit=True also scores the suite's audit share with the audit judge (random_audit scores)."""
     run_id = run_id or f"run_{dt.datetime.now(dt.timezone.utc):%Y%m%d%H%M%S}_{uuid.uuid4().hex[:6]}"
     sem = asyncio.Semaphore(concurrency)
 
@@ -107,7 +108,7 @@ async def run_async(agent, items, suite, calibration, evaluators, run_id=None, b
             return conv
 
     convs = await asyncio.gather(*(produce(it) for it in items))
-    results = await Engine(suite, calibration, evaluators, audit=False).run_async(convs)
+    results = await Engine(suite, calibration, evaluators, audit=audit).run_async(convs)
     out = []
     for item, conv, r in zip(items, convs, results):
         for s in r["scores"]:

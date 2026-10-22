@@ -5,6 +5,8 @@ Engine (no services needed):
   report      --calib calib/
   run         --suite S --calib calib/ --data convs.jsonl --out scores.jsonl
   experiment  --suite S --calib calib/ --items items.jsonl --agent pkg.mod:fn [--baseline run.json] [--report run.json]
+  evolve      --suite S --calib calib/ --items items.jsonl --harness dir/ --agent pkg.mod:build --model M --out evo/
+                                                                            optimise the agent's harness against the suite
   synth       --spec spec.yaml --n 50 --out synth.jsonl
   gate        --suite S --data human_labelled.jsonl [--folds 5]           phase-1 gate (exit code 1 if not passed)
 
@@ -141,6 +143,38 @@ def cmd_experiment(a):
     if a.report:
         Path(a.report).write_text(json.dumps(result, indent=1, default=str, ensure_ascii=False))
     return 0 if s["passed"] else 1
+
+
+def cmd_evolve(a):
+    from . import evolve
+    from .bundle import load
+    suite, cal, evaluators = load(a.suite, a.calib)
+    module, fn = a.agent.split(":")
+    build = getattr(importlib.import_module(module), fn)
+    if a.proposer:
+        module, fn = a.proposer.split(":")
+        proposer = getattr(importlib.import_module(module), fn)
+    elif a.model:
+        judges = {e["model"].split("/")[0] for e in suite.evaluators if e.get("type") == "llm" and "/" in e.get("model", "")}
+        if a.model.split("/")[0] in judges:
+            print(f"warning: the proposer {a.model} shares a provider with the suite's judges; it may learn their blind spots")
+        proposer = evolve.LLMProposer(a.model)
+    else:
+        print("evolve needs --model or --proposer", file=sys.stderr)
+        return 2
+    rep = evolve.evolve(build, a.harness, read_jsonl(a.items), suite, cal, evaluators, proposer, a.out,
+                        iterations=a.iterations, minibatch=a.minibatch, mutable=a.mutable, val_share=a.val_share,
+                        test_share=a.test_share, tolerance=a.tolerance, min_z=a.min_z, seed=a.seed)
+    print(f"best {rep['best']} ({' → '.join(rep['lineage'])}): {rep['accepted']} of {rep['attempts']} attempts accepted; "
+          f"validation score {rep['val']['seed']:.3f} → {rep['val']['best']:.3f}")
+    if "test" in rep:
+        t = rep["test"]
+        print(f"test split ({rep['splits']['test']} items, scored once): {t['seed']['mean']:.3f} → {t['best']['mean']:.3f} "
+              f"(gain {t['gain']:+.3f}, SE {t['gain_se']:.3f})")
+        if t.get("audit_agreement_dropped"):
+            print(f"warning: the audit judge agrees less with the routes on the best harness for "
+                  f"{', '.join(t['audit_agreement_dropped'])}; label a sample before trusting the gain")
+    return 0
 
 
 def cmd_synth(a):
@@ -346,6 +380,23 @@ def main(argv=None):
     e.add_argument("--baseline")
     e.add_argument("--report")
     e.add_argument("--tolerance", type=float, default=0.02)
+    ev = sub.add_parser("evolve", help="optimise an agent's harness (prompts, tool descriptions, config) against the suite")
+    ev.add_argument("--suite", required=True)
+    ev.add_argument("--calib", required=True)
+    ev.add_argument("--items", required=True)
+    ev.add_argument("--harness", required=True, help="directory of the seed harness; only its files are edited")
+    ev.add_argument("--agent", required=True, help="module:function taking a harness directory, returning an agent")
+    ev.add_argument("--out", required=True)
+    ev.add_argument("--model", help="proposer model (OpenRouter id)")
+    ev.add_argument("--proposer", help="module:function taking a request, returning {rationale, files}")
+    ev.add_argument("--iterations", type=int, default=10)
+    ev.add_argument("--minibatch", type=int, default=8)
+    ev.add_argument("--mutable", nargs="*", help="path globs the proposer may write (default: text and config files)")
+    ev.add_argument("--val-share", type=float, default=0.3)
+    ev.add_argument("--test-share", type=float, default=0.2)
+    ev.add_argument("--tolerance", type=float, default=0.02)
+    ev.add_argument("--min-z", type=float, default=1.0, help="standard errors the validation gain must clear")
+    ev.add_argument("--seed", type=int, default=0)
     s = sub.add_parser("synth")
     s.add_argument("--spec", required=True)
     s.add_argument("--n", type=int, default=50)
@@ -440,7 +491,7 @@ def main(argv=None):
     if args.cmd == "report":
         print_report(json.loads((Path(args.calib) / "calibration.json").read_text()))
         return 0
-    handler = {"calibrate": cmd_calibrate, "run": cmd_run, "experiment": cmd_experiment, "synth": cmd_synth,
+    handler = {"calibrate": cmd_calibrate, "run": cmd_run, "experiment": cmd_experiment, "evolve": cmd_evolve, "synth": cmd_synth,
                "setup": cmd_setup, "serve": cmd_serve, "mcp": cmd_mcp, "presidio": cmd_presidio, "tracker": cmd_tracker, "worker": cmd_worker,
                "replay": cmd_replay, "suite": cmd_suite, "register": cmd_register, "shadow": cmd_lifecycle,
                "promote": cmd_lifecycle, "reject": cmd_lifecycle, "drift": cmd_drift, "annotate": cmd_annotate,

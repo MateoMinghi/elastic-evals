@@ -506,6 +506,22 @@ LLM cost then follows uncertainty, not traffic.
 - **Gates:** absolute for critical checks (zero false confirmations); relative to a baseline run for the rest. Assertion vocabulary from promptfoo (`trajectory:tool-sequence`, `tool-call-f1`, `not-`).
 - **Results** go into the same indices, so comparing an experiment with production is a query.
 
+### 6.11 Harness optimisation (`evolve`)
+
+The same machinery can improve the agent instead of only measuring it. `elastic_evals evolve` edits the agent's *harness* (a directory of prompts, tool descriptions, skills and configuration the agent is built from) and keeps an edit only when the suite shows it helps. The research behind it is in [research/harness-optimization.md](research/harness-optimization.md).
+
+- **Kernel and surface.** Only files in the harness directory that match the mutable globs (text and configuration by default) can change. The agent's code, the suite, the calibration and the items are the kernel. Code in the surface (`--mutable '*.py'`) needs a sandbox, because the agent runs in the loop's process.
+- **Splits.** Items are split by a hash of their id into train (the proposer sees these failures), validation (decides) and test (scored once at the end).
+- **Iteration.**
+  1. Pick a parent that no other accepted candidate dominates on validation items (GEPA's per-item Pareto front).
+  2. Run it on a train minibatch. Its failures go to the proposer: the transcript, the record, the failed checks with their `ask`, and the failed assertions. The proposer also sees the outcome of earlier attempts. It never sees a check's rule, route, thresholds or judge prompt.
+  3. The child must beat the parent on the same minibatch. On validation it must then clear three gates against the parent: a paired mean gain of at least `min_z` standard errors, no check's flagged rate rising by more than `tolerance` (critical checks not at all), and no more failed assertions.
+- **Item score.** The share of an item's checks and assertions that are clean. Critical checks weigh 3.
+- **Archive.** Every attempt is kept with its lineage, rationale, changed and refused files, and gates (`archive.jsonl`, `candidates/`).
+- **Goodhart check.** On the test split, the seed and the best candidate are scored with the audit judge on every item. If the audit judge's agreement with the routes falls on the best candidate, the report names the checks: the gain may come from the evaluators' blind spots rather than from the task. Label a sample of them before trusting it.
+- **Nothing is deployed.** The best candidate is reviewed, run as an experiment, and shipped like any other change.
+- **The proposer** is an LLM (`--model`, preferably from a different model family than the suite's judges) or any function (`--proposer pkg.mod:fn`), such as a coding agent.
+
 ---
 
 ## 7. Retention and sampling (eval-aware)
@@ -679,6 +695,7 @@ Everything in §4–§11 exists and is tested. Tests: `pytest` (50: offline, and
 | Labels, annotation queues, agreement | `annotation.py` | Fill rules: audit disagreement, tier disagreement, low confidence, stratified |
 | Datasets, experiments, gates, pytest plugin | `experiments.py`, `pytest_plugin.py` | Versioned items; promptfoo-style assertions |
 | Synthetic sets, distillation | `synth.py`, `distill.py` | |
+| Harness optimisation | `evolve.py`, `evolve` command | Kernel and surface split, trace feedback to a pluggable proposer, per-item Pareto parents, minibatch and validation gates, lineage archive, audited test split (§6.11) |
 | MCP server | `mcp_server.py`, `mcp` command | 30 tools over the API (18 read, 12 write; `--read-only` drops the writes); stdio or streamable HTTP; a test checks every tool's request against the routes of the real app |
 | API, Sentry bridge | `api.py`, `sentry.py` | Scoped API keys per tenant and a platform role; audit log; re-scoring; HMAC webhooks on issue, error and regression events; External Issue links to the issue's conversations |
 | Tenant suite policy | `suite_policy.py` | Built-in rules only; judge URLs, key variables and Hugging Face models from operator allow-lists |
