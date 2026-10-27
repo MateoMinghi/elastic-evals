@@ -29,7 +29,8 @@ ARGS = {  # the smallest valid call of every tool
     "add_to_annotation_queue": {"queue_id": "q", "conversation_ids": ["c1"]}, "fill_annotation_queue": {"queue_id": "q"},
     "create_dataset": {"name": "n"}, "add_dataset_items": {"dataset_id": "d", "from_conversations": ["c1"]},
     "list_conversations": {"q": "refund", "flag": "hallucination", "since": "2026-10-01", "error": True},
-    "score_summary": {"since": "2026-10-01", "agent": "bot"},
+    "score_summary": {"since": "2026-10-01", "agent": "bot", "model": "gpt-6-luna"},
+    "model_summary": {"since": "2026-10-01", "agent": "bot"},
 }
 SUITE = {"versions": [{"version": "v2", "created_at": "t2", "yaml": "y" * 5000}, {"version": "v1", "created_at": "t1", "yaml": "old"}],
          "calibrations": []}

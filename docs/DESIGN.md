@@ -505,6 +505,7 @@ LLM cost then follows uncertainty, not traffic.
 - **`elastic_evals experiment` and a pytest plugin** run an agent over a dataset. Spans get the `ee.experiment.*` tags, and the same suite and calibration score them.
 - **Gates:** absolute for critical checks (zero false confirmations); relative to a baseline run for the rest. Assertion vocabulary from promptfoo (`trajectory:tool-sequence`, `tool-call-f1`, `not-`).
 - **Results** go into the same indices, so comparing an experiment with production is a query.
+- **Model sweeps** (`elastic_evals sweep`) answer which model the *agent* should run on: the same items with the agent on each candidate, k repeats, ranked by success rate (no flagged check, no failed assertion; Wilson interval), with critical checks disqualifying. Cost is the agent's, from the usage its conversations carry: **cost per task** (spend per item, so it counts the tokens a model needs, not just its rate), **cost per successful task**, **effective cost per 1M tokens** and the **list price per 1M tokens blended 7:2:1** cache-hit:input:output (Artificial Analysis' ratio); then latency, a paired bootstrap against a baseline model, and the Pareto frontier of success against cost per task. A judge from a candidate's family is reported, since judges favour their own family. `/v1/models/summary` gives the same figures from production rollups.
 
 ---
 

@@ -133,7 +133,7 @@ The full example is [`examples/banking_suite.yaml`](examples/banking_suite.yaml)
 | **Evaluation** | Calibrated cascade (rules → local heads → Jev → LLM → human); trajectory and per-step checks; multi-class and multilingual checks with per-language accuracy floors; Hugging Face classifier and zero-shot adapters; custom evaluator adapters; local-only mode |
 | **Trust** | Calibration with a validation floor and a target; calibrations move through candidate → shadow → active → retired; drift monitor with an independent audit judge; distillation of judge labels into local heads |
 | **Humans** | Annotation queues filled by rules (stratified, low-confidence, flagged), keyboard-driven labelling in the UI or terminal; shared label sets; labels feed calibration |
-| **Testing** | Datasets from real conversations; experiments comparing two agent versions; a pytest plugin so CI can fail on flagged conversations |
+| **Testing** | Datasets from real conversations; experiments comparing two agent versions; model sweeps that rank the LLMs your agent could run on by success, cost per task and cost per 1M tokens; a pytest plugin so CI can fail on flagged conversations |
 | **Sentry** | `before_send` hook and span processor to link events to conversations; webhook bridge for issues, errors and regressions; quality-regression issues; External Issue links |
 | **Operations** | Docker Compose and a Helm chart; scoped API keys with roles (platform, admin, engineer, annotator, viewer, ingest); allow-lists that make tenant-registered suites safe to run; OpenSearch Dashboards saved objects |
 
@@ -335,6 +335,30 @@ Conversations are JSONL:
 ```
 
 Calibration data adds `"labels": {"check": 0|1|"class"}`; observation checks are labelled per step as `"check@<span_id>"`.
+
+### Which model should your agent run on?
+
+Not which model makes the best judge, but which one makes the best agent. `sweep` runs the same items with your agent on each candidate model, scores every conversation with the same suite and calibration, and ranks the models:
+
+```bash
+python -m elastic_evals sweep --suite S --calib calib/ --items items.jsonl --agent my_pkg.agent:make_agent \
+    --models anthropic/claude-haiku-5.5,openai/gpt-6-luna,deepseek/deepseek-v4.1-flash \
+    --prices deploy/collector/prices.json --repeats 3 --report sweep.json
+```
+
+`make_agent(model)` returns the agent; the conversations it returns carry the agent's `usage` (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens`, as one dict or one per LLM call with its `model`), or a `cost_usd` the provider reported. For each model:
+
+| Column | Meaning |
+|---|---|
+| success % | items with no flagged check and no failed assertion, with a 95% Wilson interval; `--repeats k` also reports pass^k (every attempt succeeded) |
+| qualified | no critical check flagged on any item; a model that fails one ranks last whatever it costs |
+| $/task | what the agent spent per item: token prices *times the tokens the model needed* (reasoning, longer answers), so a cheap rate does not guarantee a cheap task |
+| $/success | total spend divided by successful items: failures still cost money |
+| $/1M tok | effective: spend divided by tokens actually used, after cache discounts |
+| list $/1M | list price blended 7:2:1 cache-hit:input:output, the ratio [Artificial Analysis](https://artificialanalysis.ai/methodology) uses |
+| Δ success | against the baseline model (`--baseline`, default the first), item by item, with a paired bootstrap interval |
+
+Models on the Pareto frontier of success against cost per task are starred. The sweep warns when an LLM evaluator in the calibration is from the same family as a candidate, since a judge tends to favour its own family; check that evaluator's accuracy on that model's conversations, or calibrate without it. `experiment` accepts `--prices`, `--model` and `--repeats` and reports the same cost figures for a single run. In production, `GET /v1/models/summary` gives the same figures per model from real traffic, and `/v1/scores/summary?model=` splits flag rates by the agent's model.
 
 ### In your test suite
 

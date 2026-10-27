@@ -259,7 +259,7 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
     @app.get("/v1/scores/summary")
     def score_summary(c: Ctx = Depends(need("scores:read")), frm: str | None = Query(None, alias="from"),
                       to: str | None = None, agent: str | None = None, calibration_id: str | None = None,
-                      experiment: str | None = None, interval: str = "day"):
+                      experiment: str | None = None, model: str | None = None, interval: str = "day"):
         # production decisions only, unless an experiment run is asked for
         filt: list[dict[str, Any]] = [tenant_filter(c.tenant), {"term": {"decision": True}}]
         if experiment:
@@ -270,6 +270,8 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
             filt.append({"range": {"timestamp": {k: v for k, v in (("gte", frm), ("lte", to)) if v}}})
         if agent:
             filt.append({"term": {"trace_ctx.agent": agent}})
+        if model:  # the model the agent ran on, not an evaluator's
+            filt.append({"term": {"trace_ctx.model": model}})
         if calibration_id:
             filt.append({"term": {"calibration_id": calibration_id}})
         res = os_.search("scores", {"size": 0, "query": {"bool": {"filter": filt}}, "aggs": {"check": {
@@ -293,6 +295,46 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
                 "cost_usd": b["cost"]["value"],
                 "over_time": [{"t": tb["key_as_string"], "n": tb["doc_count"], "flagged": tb["flagged"]["doc_count"]}
                               for tb in b["over_time"]["buckets"]]}
+        return out
+
+    @app.get("/v1/models/summary")
+    def model_summary(c: Ctx = Depends(need("scores:read")), frm: str | None = Query(None, alias="from"),
+                      to: str | None = None, agent: str | None = None, list_prices: bool = True):
+        """Production conversations by the model the agent ran on: cost per conversation (a task) and
+        per successful one (scored, nothing flagged), cost per 1M tokens, latency and flags. A
+        conversation that used two models counts for both; experiment runs are left out."""
+        filt: list[dict[str, Any]] = [tenant_filter(c.tenant)]
+        if agent:
+            filt.append({"term": {"agent_name": agent}})
+        if frm or to:
+            filt.append({"range": {"start_time": {k: v for k, v in (("gte", frm), ("lte", to)) if v}}})
+        res = os_.search("traces", {"size": 0, "query": {"bool": {"filter": filt, "must_not": [{"exists": {"field": "experiment_run_id"}}]}},
+                                    "aggs": {"model": {"terms": {"field": "models", "size": 100}, "aggs": {
+                                        "cost": {"sum": {"field": "cost_usd"}},
+                                        "input": {"sum": {"field": "input_tokens"}},
+                                        "output": {"sum": {"field": "output_tokens"}},
+                                        "latency": {"percentiles": {"field": "duration_ms", "percents": [50, 95]}},
+                                        "scored": {"filter": {"term": {"eval_status": "scored"}}, "aggs": {
+                                            "ok": {"filter": {"bool": {"must_not": [{"exists": {"field": "flags"}}]}}},
+                                            "flags": {"terms": {"field": "flags", "size": 100}}}}}}}}, pool(c))
+        from .pricing import PriceBook, rows_from_db
+        book = PriceBook(rows_from_db(pg)) if list_prices else None
+        now = dt.datetime.now(dt.timezone.utc)
+        out = {}
+        for b in res["aggregations"]["model"]["buckets"]:
+            n, usd = b["doc_count"], b["cost"]["value"]
+            tokens = b["input"]["value"] + b["output"]["value"]
+            scored, ok = b["scored"]["doc_count"], b["scored"]["ok"]["doc_count"]
+            pct = b["latency"]["values"]
+            out[b["key"]] = {
+                "conversations": n, "usd": usd, "cost_per_task": usd / n if n else None,
+                "success_rate": ok / scored if scored else None,
+                "cost_per_success": usd / n * scored / ok if ok else None,
+                "tokens_per_task": tokens / n if n else None,
+                "usd_per_1M_tokens": 1e6 * usd / tokens if tokens else None,
+                "list_usd_per_1M_tokens": book.blended(b["key"], now) if book else None,
+                "p50_ms": pct.get("50.0"), "p95_ms": pct.get("95.0"),
+                "flag_rates": {f["key"]: f["doc_count"] / scored for f in b["scored"]["flags"]["buckets"]} if scored else {}}
         return out
 
     # -- suites and calibrations -----------------------------------------------------------------

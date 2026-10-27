@@ -129,13 +129,21 @@ def build_server(api: EvalsAPI | None = None, read_only: bool = False) -> MCPSer
     @tool()
     async def score_summary(since: str | None = None, until: str | None = None, agent: str | None = None,
                             calibration_id: str | None = None, experiment: str | None = None,
-                            interval: str = "day") -> dict[str, Any]:
+                            model: str | None = None, interval: str = "day") -> dict[str, Any]:
         """Per check: conversations scored, how many were flagged, the rate, which evaluator tier decided them,
         the rate by language, the cost, and the rate over time (interval: hour, day, week). Production decisions
-        only, unless `experiment` names a run."""
+        only, unless `experiment` names a run. `model` keeps conversations where the agent ran on that model."""
         return await get("/v1/scores/summary", params={
             "from": since, "to": until, "agent": agent, "calibration_id": calibration_id,
-            "experiment": experiment, "interval": interval})
+            "experiment": experiment, "model": model, "interval": interval})
+
+    @tool()
+    async def model_summary(since: str | None = None, until: str | None = None,
+                            agent: str | None = None) -> dict[str, Any]:
+        """Per model the agent ran on in production: conversations, cost per conversation (task) and per
+        successful one, success rate, tokens per task, effective and list cost per 1M tokens, latency
+        p50/p95 and flag rates. Use it to compare the models an agent runs on."""
+        return await get("/v1/models/summary", params={"from": since, "to": until, "agent": agent})
 
     @tool()
     async def list_suites() -> list[Any]:

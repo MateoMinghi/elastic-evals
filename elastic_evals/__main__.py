@@ -5,6 +5,10 @@ Engine (no services needed):
   report      --calib calib/
   run         --suite S --calib calib/ --data convs.jsonl --out scores.jsonl
   experiment  --suite S --calib calib/ --items items.jsonl --agent pkg.mod:fn [--baseline run.json] [--report run.json]
+              [--prices prices.json] [--model M] [--repeats 3]
+  sweep       --suite S --calib calib/ --items items.jsonl --agent pkg.mod:make_agent --models a,b,c
+              [--prices prices.json] [--repeats 3] [--baseline a] [--report sweep.json]
+                                                                            which model the agent should run on
   synth       --spec spec.yaml --n 50 --out synth.jsonl
   gate        --suite S --data human_labelled.jsonl [--folds 5]           phase-1 gate (exit code 1 if not passed)
 
@@ -123,24 +127,80 @@ def cmd_run(a):
           f"{sum(any(e.startswith('llm') for e in x['evaluators_called']) for x in results)} sent to an LLM")
 
 
+def _import(ref):
+    module, fn = ref.split(":")
+    return getattr(importlib.import_module(module), fn)
+
+
+def _prices(path):
+    from .pricing import PriceBook
+    return PriceBook(json.loads(Path(path).read_text())) if path else None
+
+
+def _usd(v, digits=4):
+    return "" if v is None else f"${v:.{digits}f}"
+
+
 def cmd_experiment(a):
     from . import experiments as exps
     from .bundle import load
     suite, cal, evaluators = load(a.suite, a.calib)
-    module, fn = a.agent.split(":")
-    agent = getattr(importlib.import_module(module), fn)
+    agent = _import(a.agent)
     items = read_jsonl(a.items)
     baseline = json.loads(Path(a.baseline).read_text())["summary"] if a.baseline else None
-    result = exps.run(agent, items, suite, cal, evaluators, baseline=baseline, tolerance=a.tolerance)
+    result = exps.run(agent, items, suite, cal, evaluators, baseline=baseline, tolerance=a.tolerance,
+                      prices=_prices(a.prices), model=a.model, repeats=a.repeats)
     s = result["summary"]
     for check, rate in s["rates"].items():
         if rate is not None:
             print(f"{check:24s} flagged {100 * rate:5.1f}%")
     for g in s["gates"]:
         print(f"gate {g['check']:20s} {g['kind']:10s} {'PASS' if g['pass'] else 'FAIL'}")
+    ag = s["agent"]
+    if ag:
+        print(f"agent: success {100 * s['success_rate']:.1f}%, {_usd(ag['cost_per_task']) or 'unpriced'} per task, "
+              f"{_usd(ag['cost_per_success']) or '-'} per successful task, {_usd(ag['usd_per_1M_tokens'], 2) or '-'} "
+              f"per 1M tokens, {ag['tokens_per_task']:.0f} tokens per task"
+              + (f", {ag['unpriced']} unpriced" if ag["unpriced"] else ""))
     if a.report:
         Path(a.report).write_text(json.dumps(result, indent=1, default=str, ensure_ascii=False))
     return 0 if s["passed"] else 1
+
+
+def cmd_sweep(a):
+    from . import experiments as exps
+    from .bundle import load
+    suite, cal, evaluators = load(a.suite, a.calib)
+    models = [m.strip() for m in a.models.split(",") if m.strip()]
+    res = exps.sweep(_import(a.agent), models, read_jsonl(a.items), suite, cal, evaluators, prices=_prices(a.prices),
+                     repeats=a.repeats, baseline=a.baseline, concurrency=a.concurrency)
+
+    def pct(v):
+        return "" if v is None else f"{100 * v:.1f}"
+
+    rows = []
+    for r in res["models"]:
+        d = r["vs_baseline"]
+        rows.append([r["rank"], r["model"] + (" *" if r["pareto"] else ""),
+                     f"{pct(r['success_rate'])} [{pct(r['success_ci'][0])}–{pct(r['success_ci'][1])}]",
+                     "yes" if r["qualified"] else "NO " + ",".join(r["critical_flagged"]),
+                     _usd(r["cost_per_task"]), _usd(r["cost_per_success"]), f"{r['tokens_per_task'] or 0:.0f}",
+                     _usd(r["usd_per_1M_tokens"], 2), _usd(r["list_usd_per_1M_tokens"], 2),
+                     "" if r["p50_ms"] is None else f"{r['p50_ms']:.0f} / {r['p95_ms']:.0f}",
+                     "baseline" if d is None else f"{100 * d['delta']:+.1f} [{100 * d['ci'][0]:+.1f}, {100 * d['ci'][1]:+.1f}]"
+                     + (" !" if d["significant"] else "")])
+    print(tabulate(rows, headers=["#", "model", "success %", "qualified", "$/task", "$/success", "tok/task",
+                                  "$/1M tok", "list $/1M", "p50/p95 ms", "Δ success pp"]))
+    print("* Pareto frontier (success vs $/task)   ! interval excludes 0   list $/1M blended 7:2:1 cache:input:output")
+    checks = [c for c, v in res["models"][0]["rates"].items() if v is not None]
+    print()
+    print(tabulate([[r["model"], *[pct(r["rates"][c]) for c in checks]] for r in res["models"]],
+                   headers=["flagged %", *checks]))
+    for w in res["warnings"]:
+        print(f"warning: {w}")
+    if a.report:
+        Path(a.report).write_text(json.dumps(res, indent=1, default=str, ensure_ascii=False))
+    return 0
 
 
 def cmd_synth(a):
@@ -346,6 +406,20 @@ def main(argv=None):
     e.add_argument("--baseline")
     e.add_argument("--report")
     e.add_argument("--tolerance", type=float, default=0.02)
+    e.add_argument("--prices", help="price book JSON (deploy/collector/prices.json format) for the agent's usage")
+    e.add_argument("--model", help="the agent's model, when its conversations do not say")
+    e.add_argument("--repeats", type=int, default=1)
+    sw = sub.add_parser("sweep")
+    sw.add_argument("--suite", required=True)
+    sw.add_argument("--calib", required=True)
+    sw.add_argument("--items", required=True)
+    sw.add_argument("--agent", required=True, help="module:function taking a model id, returning an agent")
+    sw.add_argument("--models", required=True, help="comma-separated model ids")
+    sw.add_argument("--prices", help="price book JSON (deploy/collector/prices.json format)")
+    sw.add_argument("--repeats", type=int, default=1)
+    sw.add_argument("--baseline", help="model to compare the others with (default: the first)")
+    sw.add_argument("--concurrency", type=int, default=4)
+    sw.add_argument("--report")
     s = sub.add_parser("synth")
     s.add_argument("--spec", required=True)
     s.add_argument("--n", type=int, default=50)
@@ -440,7 +514,7 @@ def main(argv=None):
     if args.cmd == "report":
         print_report(json.loads((Path(args.calib) / "calibration.json").read_text()))
         return 0
-    handler = {"calibrate": cmd_calibrate, "run": cmd_run, "experiment": cmd_experiment, "synth": cmd_synth,
+    handler = {"calibrate": cmd_calibrate, "run": cmd_run, "experiment": cmd_experiment, "sweep": cmd_sweep, "synth": cmd_synth,
                "setup": cmd_setup, "serve": cmd_serve, "mcp": cmd_mcp, "presidio": cmd_presidio, "tracker": cmd_tracker, "worker": cmd_worker,
                "replay": cmd_replay, "suite": cmd_suite, "register": cmd_register, "shadow": cmd_lifecycle,
                "promote": cmd_lifecycle, "reject": cmd_lifecycle, "drift": cmd_drift, "annotate": cmd_annotate,

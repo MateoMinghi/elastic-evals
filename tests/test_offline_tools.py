@@ -120,6 +120,124 @@ def test_cli_experiment_exit_code(calib, tmp_path, monkeypatch):
                 "--agent", "echo_agent:agent"]) in (0, 1)
 
 
+PRICES = [{"model_pattern": "^acme/big", "tiers": [{"above_input_tokens": 0, "input": 3.0, "output": 15.0, "cache_read": 0.3}]},
+          {"model_pattern": "^acme/(small|bad)", "tiers": [{"above_input_tokens": 0, "input": 0.2, "output": 0.8}]}]
+
+
+@pytest.fixture(scope="module")
+def clean_and_flagged(calib):
+    _, suite, cal, evs = calib
+    from elastic_evals.engine import Engine
+    pool = load("synthetic.jsonl", 395)[100:]  # past the calibration's training slice
+    res = {r["conversation_id"]: r["decisions"] for r in Engine(suite, cal, evs).run(pool)}
+    clean = [c for c in pool if not any(res[c["id"]].values())][:8]
+    flagged = [c for c in pool if res[c["id"]].get("false_confirmation") == 1][:8]
+    assert len(clean) == len(flagged) == 8
+    return clean, flagged
+
+
+def _items(convs):
+    return [{"id": c["id"], "input": {"turns": c["turns"], "record": c["record"], "lang": c["lang"]}} for c in convs]
+
+
+def test_agent_cost_metrics(calib, clean_and_flagged):
+    from elastic_evals.pricing import PriceBook
+    _, suite, cal, evs = calib
+    clean, flagged = clean_and_flagged
+    items = _items(clean[:3] + flagged[:1])
+
+    def agent(inp):  # one priced call with cache hits and one with reasoning, per conversation
+        return dict(inp, model="acme/big-2", usage=[
+            {"input_tokens": 1000, "cache_read_tokens": 600, "output_tokens": 100},
+            {"input_tokens": 500, "output_tokens": 400, "reasoning_tokens": 300}])
+    run = exps.run(agent, items, suite, cal, evs, prices=PriceBook(PRICES))
+    s, ag = run["summary"], run["summary"]["agent"]
+    per_task = (400 * 3 + 600 * 0.3 + 100 * 15 + 500 * 3 + 400 * 15) / 1e6
+    assert ag["cost_per_task"] == pytest.approx(per_task) and ag["usd"] == pytest.approx(4 * per_task)
+    assert s["success_rate"] == pytest.approx(0.75) and s["success_ci"][0] < 0.75 < s["success_ci"][1]
+    assert ag["cost_per_success"] == pytest.approx(4 * per_task / 3)  # failures still cost money
+    assert ag["tokens_per_task"] == 2000 and ag["tokens"]["reasoning_tokens"] == 1200
+    assert ag["usd_per_1M_tokens"] == pytest.approx(1e6 * per_task / 2000)
+    assert ag["models"] == ["acme/big-2"] and ag["unpriced"] == 0 and ag["p95_ms"] >= ag["p50_ms"] >= 0
+    # a cost the provider reported wins over the price book; no usage and no price leaves it unpriced
+    assert exps.agent_usage({"usage": {"input_tokens": 5}, "cost_usd": 0.5}, PriceBook(PRICES), "acme/big")["usd"] == 0.5
+    bare = exps.run(lambda inp: dict(inp), items, suite, cal, evs, prices=PriceBook(PRICES), model="unknown/x")
+    assert bare["summary"]["agent"]["unpriced"] == 4 and bare["summary"]["agent"]["cost_per_task"] is None
+
+
+def test_blended_list_price():
+    from elastic_evals.pricing import PriceBook
+    import datetime as dt
+    book, at = PriceBook(PRICES), dt.datetime(2026, 10, 1, tzinfo=dt.timezone.utc)
+    assert book.blended("acme/big", at) == pytest.approx((7 * 0.3 + 2 * 3 + 15) / 10)
+    assert book.blended("acme/small", at) == pytest.approx((7 * 0.2 + 2 * 0.2 + 0.8) / 10)  # no cache price
+    assert book.blended("other", at) is None
+
+
+def test_sweep_ranks_models(calib, clean_and_flagged):
+    from elastic_evals.pricing import PriceBook
+    _, suite, cal, evs = calib
+    clean, flagged = clean_and_flagged
+    items = _items(clean)
+    worse = {c["id"]: f for c, f in zip(clean, flagged)}
+
+    def make_agent(model):
+        def agent(inp):
+            cid = next(c["id"] for c in clean if c["turns"] == inp["turns"])
+            src = inp if model != "acme/bad" or cid not in list(worse)[:6] else worse[cid]
+            tokens = {"acme/big": 4000, "acme/small": 3000, "acme/bad": 1000}[model]
+            return dict(src, usage={"input_tokens": tokens, "output_tokens": tokens // 4})
+        return agent
+    res = exps.sweep(make_agent, ["acme/big", "acme/small", "acme/bad"], items, suite, cal, evs,
+                     prices=PriceBook(PRICES), repeats=2)
+    rows = {r["model"]: r for r in res["models"]}
+    assert [r["model"] for r in res["models"]] == ["acme/small", "acme/big", "acme/bad"]
+    assert rows["acme/bad"]["qualified"] is False and rows["acme/bad"]["critical_flagged"]["false_confirmation"] == 12
+    assert rows["acme/small"]["pareto"] and not rows["acme/big"]["pareto"]  # same success, dearer
+    assert not rows["acme/bad"]["pareto"]  # cheapest, but disqualified
+    assert all(s["trace_ctx"]["model"] == "acme/small" for it in res["runs"]["acme/small"]["items"] for s in it["scores"])
+    assert rows["acme/big"]["cost_per_task"] > rows["acme/small"]["cost_per_task"]
+    assert rows["acme/big"]["list_usd_per_1M_tokens"] == pytest.approx(2.31)
+    assert rows["acme/big"]["vs_baseline"] is None and res["baseline"] == "acme/big"
+    d = rows["acme/bad"]["vs_baseline"]
+    assert d["delta"] == pytest.approx(-0.75) and d["significant"] and d["n"] == 8
+    assert rows["acme/small"]["vs_baseline"]["delta"] == 0 and not rows["acme/small"]["vs_baseline"]["significant"]
+    assert rows["acme/small"]["n"] == 16 and rows["acme/small"]["pass_all_k"] == 1.0
+    assert res["warnings"] == []  # rules only: no judge to favour its own family
+    assert exps.family("anthropic/claude-haiku-5.5") & exps.family("claude-opus-5-5")
+    assert not exps.family("openai/gpt-6-luna") & exps.family("deepseek/deepseek-v4.1-flash")
+    with pytest.raises(ValueError):
+        exps.sweep(make_agent, ["acme/big"], items, suite, cal, evs, baseline="acme/other")
+
+
+def test_cli_sweep(calib, clean_and_flagged, tmp_path, monkeypatch, capsys):
+    d, _, _, _ = calib
+    clean, _ = clean_and_flagged
+    items = tmp_path / "items.jsonl"
+    items.write_text("\n".join(json.dumps(it) for it in _items(clean[:4])))
+    (tmp_path / "model_agent.py").write_text(
+        "def make_agent(model):\n"
+        "    n = 2000 if 'big' in model else 500\n"
+        "    return lambda inp: dict(inp, usage={'input_tokens': n, 'output_tokens': n // 4})\n"
+        "small = make_agent('acme/small')\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    prices = tmp_path / "prices.json"
+    prices.write_text(json.dumps(PRICES))
+    report = tmp_path / "sweep.json"
+    assert cli(["sweep", "--suite", str(d / "suite.yaml"), "--calib", str(d / "cal"), "--items", str(items),
+                "--agent", "model_agent:make_agent", "--models", "acme/big,acme/small", "--prices", str(prices),
+                "--report", str(report)]) == 0
+    out = capsys.readouterr().out
+    assert "$/task" in out and "list $/1M" in out and "acme/small *" in out
+    res = json.loads(report.read_text())
+    assert res["models"][0]["model"] == "acme/small" and res["models"][0]["cost_per_task"] == pytest.approx(
+        (500 * 0.2 + 125 * 0.8) / 1e6)
+    # one model through `experiment`: the conversations carry no model, --model names it
+    assert cli(["experiment", "--suite", str(d / "suite.yaml"), "--calib", str(d / "cal"), "--items", str(items),
+                "--agent", "model_agent:small", "--prices", str(prices), "--model", "acme/small"]) == 0
+    assert "agent: success 100.0%, $0.0002 per task" in capsys.readouterr().out
+
+
 def test_synth_spec_items():
     spec = yaml.safe_load((ROOT / "examples/banking_synth.yaml").read_text())
     rng = random.Random(0)

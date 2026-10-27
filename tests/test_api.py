@@ -325,6 +325,27 @@ def test_prices_export_and_reprice(deployment):
     assert c.post("/v1/reprice", json={"from": "2000-01-01"}, headers=k).json()["repriced"] == 0  # idempotent
 
 
+def test_model_summary(deployment):
+    # after test_prices_export_and_reprice: the demo model is priced at $1 / $2 per 1M tokens
+    c, k = deployment["client"], deployment["keys"]["viewer"]
+    m = c.get("/v1/models/summary", headers=k).json()
+    assert set(m) == {"demo-model"}
+    d = m["demo-model"]
+    rows = c.get("/v1/conversations", params={"size": 500}, headers=k).json()["items"]
+    usd = sum(r["cost_usd"] for r in rows)
+    tokens = sum(r["input_tokens"] + r["output_tokens"] for r in rows)
+    ok = sum(not r.get("flags") for r in rows)
+    assert d["conversations"] == N and d["cost_per_task"] == pytest.approx(usd / N) and usd > 0
+    assert d["success_rate"] == pytest.approx(ok / N) and d["cost_per_success"] == pytest.approx(usd / ok)
+    assert d["usd_per_1M_tokens"] == pytest.approx(1e6 * usd / tokens) and d["tokens_per_task"] == pytest.approx(tokens / N)
+    assert d["list_usd_per_1M_tokens"] == pytest.approx((7 * 1.0 + 2 * 1.0 + 2.0) / 10)  # no cache price: input
+    assert d["p95_ms"] >= d["p50_ms"] > 0 and d["flag_rates"]
+    assert c.get("/v1/models/summary", headers=deployment["keys"]["other"]).json() == {}
+    # the score summary splits by the agent's model
+    assert all(v["n"] == N for v in c.get("/v1/scores/summary", params={"model": "demo-model"}, headers=k).json().values())
+    assert c.get("/v1/scores/summary", params={"model": "other-model"}, headers=k).json() == {}
+
+
 def test_rescore_reopens_conversations(deployment):
     c, k, pg = deployment["client"], deployment["keys"]["admin"], deployment["pg"]
     cid = deployment["convs"][5]["id"]

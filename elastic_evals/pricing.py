@@ -52,6 +52,16 @@ class PriceBook:
             return usd, p.id
         return None, None
 
+    def blended(self, model: str | None, at: dt.datetime, ratio=(7, 2, 1)) -> float | None:
+        """List price in USD per 1M tokens, blended cache-hit:input:output 7:2:1 (Artificial Analysis'
+        ratio; a model without a cache price pays the input price). None when no price matches."""
+        for p in self.prices:
+            if model and p.pattern.search(model) and at >= p.start and p.tiers:
+                t = p.tiers[0]
+                rates = (t.get("cache_read", t.get("input", 0)), t.get("input", 0), t.get("output", 0))
+                return sum(w * r for w, r in zip(ratio, rates)) / sum(ratio)
+        return None
+
 
 def rows_from_db(pg) -> list[dict]:
     return [{"id": f"price-{r['id']}", "model_pattern": r["model_pattern"], "start_date": str(r["start_date"]),
