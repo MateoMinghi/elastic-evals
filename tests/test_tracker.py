@@ -1,6 +1,5 @@
 """The tracker counts every span once, however many times it is delivered (no services needed)."""
 
-from opentelemetry.proto.common.v1 import common_pb2
 from opentelemetry.proto.trace.v1 import trace_pb2
 
 from elastic_evals.tracker import Summarizer
