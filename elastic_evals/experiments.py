@@ -124,13 +124,7 @@ def succeeded(item, suite) -> bool:
             and all(a["pass"] for a in item["assertions"]))
 
 
-def wilson(k, n, z=1.96):
-    """95% Wilson interval of a proportion; honest on the small datasets experiments use."""
-    if not n:
-        return None
-    p = k / n
-    centre, half = p + z * z / (2 * n), z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
-    return [float(max(0.0, (centre - half) / (1 + z * z / n))), float(min(1.0, (centre + half) / (1 + z * z / n)))]
+from .stats import wilson  # noqa: E402,F401  (re-exported: experiments report Wilson intervals)
 
 
 # -- the agent's own cost ------------------------------------------------------------------------

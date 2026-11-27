@@ -23,7 +23,7 @@ type item struct {
 var mapped = map[string]bool{
 	"ee.tenant_id": true, "ee.project_id": true, "ee.internal": true, "ee.eval_flag": true, "ee.sentry.event_id": true,
 	"ee.experiment.run_id": true, "ee.experiment.item_id": true, "ee.semconv.source": true, "ee.tags": true, "ee.span.type": true,
-	"ee.redacted": true, "ee.redaction.failed": true,
+	"ee.redacted": true, "ee.redaction.failed": true, "ee.redaction.reason": true, "ee.redaction.dropped": true,
 	"gen_ai.conversation.id": true, "gen_ai.operation.name": true, "gen_ai.agent.name": true, "gen_ai.agent.id": true,
 	"gen_ai.workflow.name": true, "gen_ai.provider.name": true, "gen_ai.request.model": true, "gen_ai.response.model": true,
 	"gen_ai.tool.name": true, "gen_ai.tool.call.id": true, "gen_ai.usage.input_tokens": true, "gen_ai.usage.output_tokens": true,
@@ -99,6 +99,10 @@ func (e *osExporter) buildDocs(td ptrace.Traces, now time.Time) []item {
 				}
 				if v, ok := a.Get("ee.redaction.failed"); ok && v.Bool() {
 					doc["redaction_failed"] = true
+					setStr(doc, "redaction_reason", str(a, "ee.redaction.reason"))
+					if v, ok := a.Get("ee.redaction.dropped"); ok {
+						doc["redaction_dropped"] = intOf(v)
+					}
 				}
 				if v, ok := a.Get("ee.eval_flag"); ok && v.Bool() {
 					doc["eval_flag"] = true

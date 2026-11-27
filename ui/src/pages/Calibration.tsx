@@ -6,6 +6,13 @@ import { useApi } from "../hooks";
 
 // Screen 3 (detail): the calibration report — per check route, accuracy against its floor,
 // share decided by each layer, language slices; the alternatives considered; lifecycle actions.
+// Hover text of a per-language accuracy: how many labels it rests on and its 95% interval.
+function langTitle(v?: Json) {
+  if (!v) return undefined;
+  const ci = v.ci ? `, 95% interval ${Math.round(100 * v.ci[0])}–${Math.round(100 * v.ci[1])}%` : "";
+  return `${v.n} labelled conversations${ci}${v.low_n ? ". Too few to trust this number." : ""}`;
+}
+
 export function Calibration() {
   const { id = "" } = useParams();
   const { data, error, reload } = useApi(`/v1/calibrations/${id}`);
@@ -75,7 +82,10 @@ export function Calibration() {
                 <td className="num muted">{pct(r.floor)}</td>
                 <td className="num muted">{pct(r.best_accuracy)}</td>
                 {langs.map((l) => (
-                  <td key={l} className="num small">{pct(r.chosen.by_lang?.[l]?.accuracy)}</td>
+                  <td key={l} className="num small" title={langTitle(r.chosen.by_lang?.[l])}>
+                    {pct(r.chosen.by_lang?.[l]?.accuracy)}
+                    {r.chosen.by_lang?.[l]?.low_n && <span className="muted"> *</span>}
+                  </td>
                 ))}
                 <td className="small muted">
                   {Object.entries(r.chosen.decided_by as Record<string, number>).map(([e, v]) => `${e} ${pct(v, 0)}`).join(" · ")}

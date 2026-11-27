@@ -175,6 +175,20 @@ def detect_lang(text: str) -> str:
     return lang if best >= 2 and best >= 1.5 * second else "und"
 
 
+def content_gaps(spans: list[dict]) -> dict | None:
+    """Content the gateway had to drop because redaction failed, or None when nothing was lost.
+    Scores computed on a conversation with gaps are less reliable, so every view shows this."""
+    bad = [s for s in spans if s.get("redaction_failed")]
+    if not bad:
+        return None
+    reasons: dict[str, int] = {}
+    for s in bad:
+        for r in (s.get("redaction_reason") or "unknown").split(","):
+            reasons[r] = reasons.get(r, 0) + 1
+    return {"spans": len(bad), "dropped_attributes": sum(s.get("redaction_dropped") or 0 for s in bad),
+            "reasons": dict(sorted(reasons.items()))}
+
+
 def build(conversation_id: str, spans: list[dict], stage: list[dict], tenant_id: str | None = None,
           record_resolver=None) -> dict:
     spans = sorted(spans, key=lambda s: (ns(s["start_time"]), s.get("parent_span_id") is not None))
@@ -205,6 +219,7 @@ def build(conversation_id: str, spans: list[dict], stage: list[dict], tenant_id:
         "experiment": {"run_id": next((s.get("experiment_run_id") for s in spans if s.get("experiment_run_id")), None),
                        "item_id": next((s.get("experiment_item_id") for s in spans if s.get("experiment_item_id")), None)},
         "internal": any(s.get("internal") for s in spans),
+        "content_gaps": content_gaps(spans),
     }
     conv["version"] = hashlib.sha256(json.dumps([turns, record], sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
     return conv
@@ -241,4 +256,7 @@ def rollup(conv: dict, spans: list[dict]) -> dict:
         "sentry_event_ids": sorted({s["sentry_event_id"] for s in spans if s.get("sentry_event_id")}),
         "experiment_run_id": conv["experiment"]["run_id"], "experiment_item_id": conv["experiment"]["item_id"],
     }
+    if gaps := conv.get("content_gaps"):
+        doc.update({"content_incomplete": True, "content_gap_spans": gaps["spans"],
+                    "content_gap_dropped": gaps["dropped_attributes"], "content_gap_reasons": sorted(gaps["reasons"])})
     return {k: v for k, v in doc.items() if v is not None}

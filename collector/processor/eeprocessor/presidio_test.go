@@ -7,6 +7,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.uber.org/zap"
 )
 
 func TestRedactOffsetsQuotesAndOverlaps(t *testing.T) {
@@ -83,7 +87,8 @@ func TestPresidioApply(t *testing.T) {
 	cfg.Presidio.Endpoint = "http://127.0.0.1:1"
 	out = run(t, cfg, context.Background(), newTraces(map[string]string{"ee.tenant_id": "acme"},
 		map[string]any{"gen_ai.input.messages": "secret john@x.io"}))
-	if a := attrsOf(out, 0); a["gen_ai.input.messages"] != nil || a["ee.redaction.failed"] != true {
+	if a := attrsOf(out, 0); a["gen_ai.input.messages"] != nil || a["ee.redaction.failed"] != true ||
+		a["ee.redaction.reason"] != "unreachable" || a["ee.redaction.dropped"] != int64(1) {
 		t.Fatalf("drop_content: %v", a)
 	}
 	cfg.Presidio.OnError = "keep"
@@ -91,5 +96,36 @@ func TestPresidioApply(t *testing.T) {
 		map[string]any{"gen_ai.input.messages": "secret john@x.io"}))
 	if a := attrsOf(out, 0); a["gen_ai.input.messages"] != "secret john@x.io" {
 		t.Fatalf("keep: %v", a)
+	}
+}
+
+func TestFailureReason(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+	}))
+	defer slow.Close()
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
+	defer bad.Close()
+	garbled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("not json")) }))
+	defer garbled.Close()
+	for _, c := range []struct{ url, want string }{
+		{slow.URL, "timeout"}, {bad.URL, "http_503"}, {garbled.URL, "bad_response"}, {"http://127.0.0.1:1", "unreachable"},
+	} {
+		p := newPresidio(PresidioConfig{Endpoint: c.url, Timeout: 50 * time.Millisecond}, zap.NewNop())
+		_, err := p.analyze(context.Background(), "x", "en")
+		if got := failureReason(err); got != c.want {
+			t.Errorf("%s: reason %q, want %q (%v)", c.url, got, c.want, err)
+		}
+	}
+	// reasons accumulate once each, the dropped count adds up
+	m := pcommon.NewMap()
+	markFailed(m, "timeout", true)
+	markFailed(m, "timeout", true)
+	markFailed(m, "http_503", true)
+	if v, _ := m.Get("ee.redaction.reason"); v.Str() != "timeout,http_503" {
+		t.Errorf("reasons: %q", v.Str())
+	}
+	if v, _ := m.Get("ee.redaction.dropped"); v.Int() != 3 {
+		t.Errorf("dropped: %d", v.Int())
 	}
 }
