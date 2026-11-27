@@ -81,6 +81,11 @@ export function Conversations() {
                     {c.first_user_message?.slice(0, 120) || <span className="muted">{c.conversation_id}</span>}
                     {c.error && <span className="badge bad">error</span>}
                     {c.sentry_issue_ids?.length ? <span className="badge warn">sentry</span> : null}
+                    {c.content_incomplete && (
+                      <span className="badge warn" title={`content dropped (${(c.content_gap_reasons || []).join(", ")}); scores may be less reliable`}>
+                        content missing
+                      </span>
+                    )}
                   </td>
                   <td className="small">{c.agent_name}</td>
                   <td>

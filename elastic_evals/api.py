@@ -129,6 +129,7 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
     def list_conversations(c: Ctx = Depends(need("traces:read")), q: str | None = None, flag: str | None = None,
                            agent: str | None = None, error: bool | None = None, lang: str | None = None,
                            experiment: str | None = None, sentry_issue: str | None = None,
+                           content_incomplete: bool | None = None,
                            frm: str | None = Query(None, alias="from"),
                            to: str | None = None, size: int = Query(50, le=500), search_after: str | None = None):
         filt: list[dict[str, Any]] = [tenant_filter(c.tenant)]
@@ -142,6 +143,9 @@ def create_app(pg: Postgres | None = None, os_: OpenSearch | None = None, regist
             filt.append({"term": {"lang": lang}})
         if experiment:
             filt.append({"term": {"experiment_run_id": experiment}})
+        if content_incomplete is not None:  # conversations whose content was lost to a redaction failure
+            filt.append({"term": {"content_incomplete": content_incomplete}} if content_incomplete else
+                        {"bool": {"must_not": [{"term": {"content_incomplete": True}}]}})
         if sentry_issue:  # the Sentry issue's External Issue link opens this view
             filt.append({"term": {"sentry_issue_ids": sentry_issue}})
         if frm or to:

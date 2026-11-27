@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -78,10 +80,72 @@ func (p *presidio) analyze(ctx context.Context, text, lang string) ([]entity, er
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("presidio: %s", resp.Status)
+		return nil, &statusError{code: resp.StatusCode, status: resp.Status}
 	}
 	var out []entity
-	return out, json.NewDecoder(resp.Body).Decode(&out)
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, &badResponseError{err: err}
+	}
+	return out, nil
+}
+
+type statusError struct {
+	code   int
+	status string
+}
+
+func (e *statusError) Error() string { return "presidio: " + e.status }
+
+type badResponseError struct{ err error }
+
+func (e *badResponseError) Error() string { return "presidio: unreadable response: " + e.err.Error() }
+func (e *badResponseError) Unwrap() error { return e.err }
+
+// failureReason names why the analyzer call failed, in a few stable words that the UI shows and
+// that can be counted: timeout, http_<status>, bad_response, unreachable.
+func failureReason(err error) string {
+	var se *statusError
+	var be *badResponseError
+	var ne net.Error
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()):
+		return "timeout"
+	case errors.As(err, &se):
+		return fmt.Sprintf("http_%d", se.code)
+	case errors.As(err, &be):
+		return "bad_response"
+	default:
+		return "unreachable"
+	}
+}
+
+// markFailed records, on the span itself, that content was lost to a redaction failure and why.
+// Reasons accumulate (comma separated, unique) and `ee.redaction.dropped` counts the attributes.
+func markFailed(attrs pcommon.Map, reason string, dropped bool) {
+	attrs.PutBool("ee.redaction.failed", true)
+	have := str(attrs, "ee.redaction.reason")
+	if !containsReason(have, reason) {
+		if have != "" {
+			reason = have + "," + reason
+		}
+		attrs.PutStr("ee.redaction.reason", reason)
+	}
+	if dropped {
+		n := int64(0)
+		if v, ok := attrs.Get("ee.redaction.dropped"); ok {
+			n = v.Int()
+		}
+		attrs.PutInt("ee.redaction.dropped", n+1)
+	}
+}
+
+func containsReason(have, reason string) bool {
+	for _, r := range strings.Split(have, ",") {
+		if r == reason {
+			return true
+		}
+	}
+	return false
 }
 
 // redact replaces entities (offsets in Unicode code points, as Presidio reports them). Overlapping
@@ -201,14 +265,21 @@ func (p *presidio) apply(ctx context.Context, td ptrace.Traces) {
 	}
 	wg.Wait()
 	failed := 0
+	reasons := map[string]int{}
+	var firstErr error
 	for i, t := range targets {
 		r := results[i]
 		switch {
 		case r.err != nil:
 			failed++
+			reason := failureReason(r.err)
+			reasons[reason]++
+			if firstErr == nil {
+				firstErr = r.err
+			}
 			if p.cfg.OnError != "keep" {
 				t.attrs.Remove(t.key)
-				t.attrs.PutBool("ee.redaction.failed", true)
+				markFailed(t.attrs, reason, true)
 			}
 		case r.n > 0:
 			t.attrs.PutStr(t.key, r.text)
@@ -216,7 +287,9 @@ func (p *presidio) apply(ctx context.Context, td ptrace.Traces) {
 		}
 	}
 	if failed > 0 {
-		p.logger.Warn("presidio redaction failed", zap.Int("attributes", failed), zap.String("on_error", p.cfg.OnError))
+		p.logger.Warn("presidio redaction failed: content attributes "+map[bool]string{true: "kept unredacted", false: "dropped"}[p.cfg.OnError == "keep"],
+			zap.Int("attributes", failed), zap.Any("reasons", reasons), zap.String("on_error", p.cfg.OnError),
+			zap.Error(firstErr))
 	}
 }
 

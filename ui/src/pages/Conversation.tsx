@@ -47,6 +47,27 @@ function Timeline({ spans }: { spans: Json[] }) {
   );
 }
 
+const REASONS: Record<string, string> = {
+  timeout: "the redaction service timed out",
+  unreachable: "the redaction service could not be reached",
+  bad_response: "the redaction service returned an unreadable response",
+  unknown: "redaction failed",
+};
+
+// Content the gateway dropped because redaction failed. Scores below were computed without it.
+function ContentGap({ gaps }: { gaps: Json }) {
+  const reasons = Object.entries(gaps.reasons as Record<string, number>).map(
+    ([r, n]) => `${REASONS[r] ?? (r.startsWith("http_") ? `the redaction service answered ${r.slice(5)}` : r)} (${n} span${n === 1 ? "" : "s"})`,
+  );
+  return (
+    <div className="panel" role="alert" style={{ borderColor: "var(--warn)", background: "var(--warn-soft)", marginBottom: 12 }}>
+      <strong>Some content is missing from this conversation.</strong>{" "}
+      {gaps.dropped_attributes} message field{gaps.dropped_attributes === 1 ? "" : "s"} on {gaps.spans} span{gaps.spans === 1 ? "" : "s"} were
+      dropped before storage: {reasons.join("; ")}. The scores below were computed without them, so treat them as less reliable.
+    </div>
+  );
+}
+
 // Screen 1: the conversation viewer — turns, span timeline, every score with its route, layer
 // and probability (shadow and audit scores alongside), Sentry links, similar conversations.
 export function Conversation() {
@@ -76,6 +97,7 @@ export function Conversation() {
           </span>
         )}
       </div>
+      {conv?.content_gaps && <ContentGap gaps={conv.content_gaps} />}
       <div className="grid2">
         <div>
           <div className="panel">

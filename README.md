@@ -326,6 +326,7 @@ python -m elastic_evals synth     --spec examples/banking_synth.yaml --n 50 --ou
 python -m elastic_evals calibrate ... --pool unlabelled.jsonl --teacher llm_haiku        # distillation
 python -m elastic_evals experiment --suite S --calib calib/ --items items.jsonl --agent my_pkg.agent:run --report run.json
 python -m elastic_evals gate      --suite examples/banking_suite.yaml --data human_labelled.jsonl          # phase-1 gate
+python -m elastic_evals measure-redaction --data labelled_text.jsonl --endpoint http://localhost:3000   # redaction precision/recall per language
 ```
 
 Conversations are JSONL:

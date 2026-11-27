@@ -50,6 +50,8 @@
       "internal": {"type": "boolean"},
       "eval_flag": {"type": "boolean"},
       "redaction_failed": {"type": "boolean"},
+      "redaction_reason": {"type": "keyword"},
+      "redaction_dropped": {"type": "integer"},
       "sentry_event_id": {"type": "keyword"},
       "experiment_run_id": {"type": "keyword"},
       "experiment_item_id": {"type": "keyword"},

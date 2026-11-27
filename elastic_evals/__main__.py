@@ -50,6 +50,13 @@ def read_jsonl(path):
     return [json.loads(line) for line in Path(path).open() if line.strip()]
 
 
+def _lang_cell(v):
+    """Accuracy with its 95% interval; * marks a language with too few labels to trust the number."""
+    lo, hi = v.get("ci") or (None, None)
+    ci = f" [{100 * lo:.0f}-{100 * hi:.0f}]" if lo is not None else ""
+    return f"{100 * v['accuracy']:.1f}{ci}{'*' if v.get('low_n') else ''} (n={v['n']})"
+
+
 def print_report(cal):
     sc = cal["suite_choice"]
     print(f"calibration {cal.get('id', '?')} ({cal.get('status', '?')}) on {cal['n_labelled']} labelled conversations; "
@@ -61,11 +68,14 @@ def print_report(cal):
         by_lang = r["chosen"].get("by_lang", {})
         rows.append([q, " → ".join(cal["routes"][q]), f"{100 * r['chosen']['accuracy']:.1f}",
                      f"{100 * r['floor']:.1f}", f"{100 * r['best_accuracy']:.1f}",
-                     *[f"{100 * by_lang[lg]['accuracy']:.1f}" if lg in by_lang else "" for lg in langs],
+                     *[_lang_cell(by_lang[lg]) if lg in by_lang else "" for lg in langs],
                      f"{r['chosen']['usd_per_conv'] * 1e6:.1f}", f"{r['chosen']['ms_per_conv']:.0f}",
                      "yes" if r.get("meets_floor", True) else "NO", "yes" if r["meets_target"] else "NO"])
     print(tabulate(rows, ["question", "route", "acc %", "floor %", "best %", *[f"{lg} %" for lg in langs],
                           "$ / 1M conv", "ms", "meets floor", "meets target"], tablefmt="github"))
+    if any(v.get("low_n") for r in cal["report"].values() for v in r["chosen"].get("by_lang", {}).values()):
+        print("* fewer labelled conversations than needed to trust a per-language rate; "
+              "label more in that language before setting its threshold")
 
 
 def _client(allow_hosted):
@@ -380,6 +390,11 @@ def cmd_annotate(a):
             annotation.submit(pg, os_, reg, a.queue, cid, labels, a.annotator, conv["lang"])
 
 
+def cmd_measure_redaction(args):
+    from .redaction_eval import run
+    return run(args)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="elastic_evals", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -461,6 +476,14 @@ def main(argv=None):
     ps = sub.add_parser("presidio", help="Presidio analyzer service for the gateway's redaction")
     ps.add_argument("--host", default="0.0.0.0")
     ps.add_argument("--port", type=int, default=3000)
+    mr = sub.add_parser("measure-redaction", help="precision and recall of the redaction analyzer per language and entity")
+    mr.add_argument("--data", required=True, help="labelled text (JSONL): text, lang, entities[{type,start,end}]")
+    mr.add_argument("--endpoint", default=os.environ.get("EE_PRESIDIO_URL", "http://localhost:3000"))
+    mr.add_argument("--entities", help="comma-separated entity types to ask the analyzer for (default: its own)")
+    mr.add_argument("--score-threshold", type=float, default=0.5, help="the gateway's presidio.score_threshold")
+    mr.add_argument("--min-precision", type=float, default=0.8)
+    mr.add_argument("--min-recall", type=float, default=0.8)
+    mr.add_argument("--out")
     tr = sub.add_parser("tracker")
     tr.add_argument("--brokers", default=os.environ.get("EE_KAFKA_BROKERS", "localhost:9092"))
     tr.add_argument("--topic", default=os.environ.get("EE_KAFKA_TOPIC", "ee-spans"))
@@ -519,7 +542,7 @@ def main(argv=None):
                "replay": cmd_replay, "suite": cmd_suite, "register": cmd_register, "shadow": cmd_lifecycle,
                "promote": cmd_lifecycle, "reject": cmd_lifecycle, "drift": cmd_drift, "annotate": cmd_annotate,
                "reprice": cmd_reprice, "prices": cmd_prices,
-               "dashboards": cmd_dashboards, "gate": cmd_gate}[args.cmd]
+               "dashboards": cmd_dashboards, "gate": cmd_gate, "measure-redaction": cmd_measure_redaction}[args.cmd]
     return handler(args) or 0
 
 

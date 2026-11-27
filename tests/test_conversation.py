@@ -31,3 +31,25 @@ def test_detect_lang():
     assert detect_lang("Hola, quiero mandar plata a mi amiga para el cumple") == "es"
     assert detect_lang("I want to change my booking for the trip to Paris please") == "en"
     assert detect_lang("ok") == "und"
+
+
+def test_dropped_content_is_reported_not_silent():
+    """When redaction fails the gateway drops the content and marks the span. The conversation and its
+    rollup must say so, with the reason, instead of looking like a short conversation."""
+    from elastic_evals.conversation import content_gaps, rollup
+    spans = [_span("a", "AGENT", "2026-10-20T10:00:00Z", parent_span_id=None),
+             _span("g", "GENERATION", "2026-10-20T10:00:01Z", parent_span_id="a",
+                   redaction_failed=True, redaction_reason="timeout,http_503", redaction_dropped=2),
+             _span("h", "GENERATION", "2026-10-20T10:00:02Z", parent_span_id="a",
+                   redaction_failed=True, redaction_reason="timeout", redaction_dropped=1)]
+    gaps = content_gaps(spans)
+    assert gaps == {"spans": 2, "dropped_attributes": 3, "reasons": {"http_503": 1, "timeout": 2}}
+    conv = build("c1", spans, [], "acme")
+    assert conv["content_gaps"] == gaps
+    r = rollup(conv, spans)
+    assert r["content_incomplete"] is True and r["content_gap_dropped"] == 3
+    assert r["content_gap_reasons"] == ["http_503", "timeout"]
+
+    clean = build("c2", spans[:1], [], "acme")
+    assert clean["content_gaps"] is None
+    assert "content_incomplete" not in rollup(clean, spans[:1])

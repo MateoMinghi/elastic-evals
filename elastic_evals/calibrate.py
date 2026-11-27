@@ -38,6 +38,7 @@ import numpy as np
 
 from .evaluators import LocalHeadEvaluator, build
 from .providers import OpenRouter
+from .stats import MIN_N, wilson
 from .suite import Suite
 
 
@@ -183,7 +184,8 @@ def simulate(chain, q, convs, labels, preds, cost, lat, thresholds):
     n = len(convs)
     return {"chain": [e.id for e in chain], "accuracy": float(np.mean(correct)) if correct else 0.0,
             "n": len(correct),
-            "by_lang": {lg: {"accuracy": float(np.mean(v)), "n": len(v)} for lg, v in sorted(by_lang.items())},
+            "by_lang": {lg: {"accuracy": float(np.mean(v)), "n": len(v), "ci": wilson(sum(v), len(v)),
+                             "low_n": len(v) < MIN_N} for lg, v in sorted(by_lang.items())},
             "usd_per_conv": float(np.mean(spend)), "ms_per_conv": 1000 * float(np.mean(latency)),
             "decided_by": {k: v / n for k, v in decided_by.items()}}
 

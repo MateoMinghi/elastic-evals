@@ -9,8 +9,9 @@ timestamps, and upserts one `trace_tracker` row per conversation per poll:
             when new turns arrive after it was evaluated
 
 Spans marked ee.internal (evaluator traffic) are never tracked, so evaluations are never evaluated.
-Offsets are committed after the upsert: at-least-once, and the upsert is idempotent enough
-(re-counting spans only delays a conversation).
+Offsets are committed after the upsert: at-least-once. A span can still arrive twice (a client retry,
+a Kafka redelivery), and `n_spans` is what the worker waits for, so a double count makes a conversation
+wait for spans that will never come. Spans are therefore counted once per (tenant, trace, span id).
 """
 
 import asyncio
@@ -58,8 +59,10 @@ class Summarizer:
     still undecided after `max_wait_s` are flushed as plain traces.
     """
 
-    def __init__(self, max_wait_s: float = 3600, memory: int = 200_000):
-        self.max_wait_s, self.memory = max_wait_s, memory
+    def __init__(self, max_wait_s: float = 3600, memory: int = 200_000, span_memory: int = 1_000_000):
+        self.max_wait_s, self.memory, self.span_memory = max_wait_s, memory, span_memory
+        self.seen = {}         # tenant/trace/span key -> None; spans already counted, oldest first
+        self.duplicates = 0    # spans skipped because they were counted before
         self.trace_conv = {}   # (tenant, trace_id) -> conversation id (session id or trace id)
         self.pending = {}      # (tenant, trace_id) -> summary of spans waiting for their conversation
 
@@ -86,6 +89,11 @@ class Summarizer:
                     for sp in ss.spans:
                         if _bool(sp.attributes, "ee.internal"):
                             continue
+                        key = tenant.encode() + b"/" + sp.trace_id + sp.span_id
+                        if key in self.seen:
+                            self.duplicates += 1
+                            continue
+                        self.seen[key] = None
                         tkey = (tenant, sp.trace_id.hex())
                         p = self.pending.setdefault(tkey, {"n": 0, "agent": None, "root_ended": False, "session": None,
                                                            "since": now})
@@ -103,6 +111,9 @@ class Summarizer:
             self.trace_conv[tkey] = cid
             add(tkey[0], cid, "trace" if cid == tkey[1] else "session", p)
             del self.pending[tkey]
+        if len(self.seen) > self.span_memory:  # forget the oldest half; a duplicate that late only delays one retry
+            for k in list(self.seen)[: self.span_memory // 2]:
+                del self.seen[k]
         if len(self.trace_conv) > self.memory:  # forget the oldest half
             for k in list(self.trace_conv)[: self.memory // 2]:
                 del self.trace_conv[k]
@@ -163,7 +174,8 @@ async def run(pg: Postgres, brokers: str, timing: Timing, topic: str = "ee-spans
             summary = summarizer.feed(payloads)
             if summary:
                 n = await asyncio.to_thread(apply, pg, summary, timing)
-                log.info("tracked %d conversations from %d messages", n, len(payloads))
+                log.info("tracked %d conversations from %d messages (%d duplicate spans ignored so far)",
+                         n, len(payloads), summarizer.duplicates)
             if payloads:
                 # spans still pending (trace not yet attributed) are not durable across a restart;
                 # their root span, when it arrives, still tracks the conversation
